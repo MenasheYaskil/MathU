@@ -1,0 +1,47 @@
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/mathu_racegame?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jpa:
+    hibernate:
+      # Schema is owned by schema.sql — Hibernate must never alter it.
+      # Use 'validate' once the DB is set up; 'none' disables all DDL.
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: true
+        # Batch inserts — useful for seeding template_variables
+        jdbc.batch_size: 50
+        order_inserts: true
+    # Disable OSIV: forces explicit transaction boundaries, critical for SSE correctness
+    open-in-view: false
+
+  sql:
+    init:
+      # schema.sql is for DBA/manual use only — never auto-run
+      mode: never
+
+server:
+  port: ${PORT:8080}
+
+app:
+  jwt:
+    # Base64-encoded 256-bit minimum key. Set via environment variable — never commit a value here.
+    # Generate with: openssl rand -base64 32
+    secret: ${JWT_SECRET}
+    # Token lifetime in milliseconds. Default: 24 hours.
+    expiration-ms: ${JWT_EXPIRATION_MS:86400000}
+
+  sse:
+    # How long an idle SSE connection is kept open before the server closes it.
+    # 15 minutes covers a typical classroom activity. Client-side EventSource
+    # will auto-reconnect and receive a fresh LEADERBOARD_SNAPSHOT on reconnect.
+    timeout-ms: ${SSE_TIMEOUT_MS:900000}
+    # How often to push a lightweight HEARTBEAT event to keep connections alive
+    # through proxies and school firewalls that close idle HTTP connections.
+    heartbeat-interval-ms: ${SSE_HEARTBEAT_MS:30000}
