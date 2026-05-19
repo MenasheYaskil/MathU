@@ -4,24 +4,21 @@ import { races as racesApi } from '../../../services/apiService';
 import { useAuthStore } from '../../../stores/authStore';
 import type { Race } from '../../../types/api';
 
-const STATUS_BADGE: Record<string, string> = {
-  LOBBY:    'bg-yellow-700 text-yellow-200',
-  ACTIVE:   'bg-green-700 text-green-200',
-  FINISHED: 'bg-gray-600 text-gray-300',
+const STATUS_CONFIG: Record<string, { label: string; dot: string; badge: string }> = {
+  LOBBY:    { label: 'LOBBY',    dot: 'bg-yellow-400', badge: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30' },
+  ACTIVE:   { label: 'LIVE',     dot: 'bg-green-400 animate-pulse', badge: 'bg-green-500/15 text-green-400 border-green-500/30' },
+  FINISHED: { label: 'FINISHED', dot: 'bg-gray-500', badge: 'bg-gray-700/50 text-gray-400 border-gray-600/30' },
 };
 
 export default function TeacherDashboard() {
   const navigate = useNavigate();
   const { username, clearAuth } = useAuthStore();
 
-  // Create form state
   const [title, setTitle] = useState('');
   const [difficulty, setDifficulty] = useState(2);
   const [createError, setCreateError] = useState<string | null>(null);
   const [createLoading, setCreateLoading] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
-
-  // Race list state
   const [myRaces, setMyRaces] = useState<Race[]>([]);
   const [listLoading, setListLoading] = useState(true);
   const [startingId, setStartingId] = useState<number | null>(null);
@@ -30,11 +27,8 @@ export default function TeacherDashboard() {
     try {
       const data = await racesApi.getMine();
       setMyRaces(data.sort((a, b) => b.raceId - a.raceId));
-    } catch {
-      // ignore — user sees empty list
-    } finally {
-      setListLoading(false);
-    }
+    } catch { /* ignore */ }
+    finally { setListLoading(false); }
   };
 
   useEffect(() => { loadRaces(); }, []);
@@ -48,7 +42,6 @@ export default function TeacherDashboard() {
       setTitle('');
       setShowCreateForm(false);
       await loadRaces();
-      // Navigate straight to the new race's lobby view
       navigate(`/teacher/race/${res.raceId}`);
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : 'Failed to create race');
@@ -68,76 +61,118 @@ export default function TeacherDashboard() {
     }
   };
 
+  const activeCount = myRaces.filter((r) => r.status === 'ACTIVE').length;
+  const lobbyCount = myRaces.filter((r) => r.status === 'LOBBY').length;
+
+  const DIFF_LABELS = ['', 'Beginner', 'Easy', 'Medium', 'Hard', 'Expert'];
+  const DIFF_COLORS = ['', 'text-green-400', 'text-lime-400', 'text-yellow-400', 'text-orange-400', 'text-red-400'];
+
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
+    <div
+      className="min-h-screen text-white"
+      style={{ background: 'linear-gradient(160deg, #08090f 0%, #0d1117 100%)' }}
+    >
       {/* Header */}
-      <header className="border-b border-gray-800 px-8 py-4 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Teacher Dashboard</h1>
-          <p className="text-gray-400 text-sm">Welcome, {username}</p>
+      <header
+        className="border-b border-white/5 px-8 py-4 flex items-center justify-between sticky top-0 z-10"
+        style={{ background: 'rgba(8,9,15,0.9)', backdropFilter: 'blur(12px)' }}
+      >
+        <div className="flex items-center gap-3">
+          <span className="text-2xl">🏎️</span>
+          <div>
+            <h1 className="text-xl font-black text-gold tracking-tight">MathU Race</h1>
+            <p className="text-gray-500 text-xs">Teacher Dashboard · {username}</p>
+          </div>
         </div>
-        <div className="flex gap-3">
+        <div className="flex items-center gap-3">
           <button
             onClick={() => setShowCreateForm(true)}
-            className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg font-semibold text-sm transition-colors"
+            className="px-5 py-2 btn-green rounded-xl text-white font-bold text-sm flex items-center gap-2"
           >
-            + New Race
+            <span>+</span> New Race
           </button>
           <button
             onClick={() => clearAuth()}
-            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors"
+            className="px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-sm text-gray-400 hover:text-white transition-all"
           >
             Sign out
           </button>
         </div>
       </header>
 
-      <div className="px-8 py-8 max-w-4xl">
+      <div className="px-8 py-7 max-w-5xl">
+        {/* Stats row */}
+        <div className="grid grid-cols-3 gap-4 mb-8">
+          {[
+            { label: 'Total Races', value: myRaces.length, icon: '🏁', color: 'text-blue-400' },
+            { label: 'Live Now', value: activeCount, icon: '🔴', color: 'text-green-400' },
+            { label: 'Waiting', value: lobbyCount, icon: '⏳', color: 'text-yellow-400' },
+          ].map(({ label, value, icon, color }) => (
+            <div key={label} className="card-glass rounded-2xl px-5 py-4 flex items-center gap-4">
+              <span className="text-2xl">{icon}</span>
+              <div>
+                <p className={`text-2xl font-black ${color}`}>{value}</p>
+                <p className="text-gray-500 text-xs font-medium">{label}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+
         {/* Create Race Modal */}
         {showCreateForm && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-            <div className="bg-gray-800 rounded-2xl p-8 w-full max-w-sm shadow-2xl">
-              <h2 className="text-xl font-bold mb-5">Create New Race</h2>
-              <form onSubmit={handleCreate} className="space-y-4">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+            <div
+              className="card-glass rounded-2xl p-8 w-full max-w-sm shadow-2xl border-gold-glow animate-bounce-in"
+            >
+              <div className="flex items-center gap-2 mb-6">
+                <span className="text-2xl">🏁</span>
+                <h2 className="text-xl font-black">Create New Race</h2>
+              </div>
+              <form onSubmit={handleCreate} className="space-y-5">
                 <input
-                  className="w-full px-4 py-2 rounded bg-gray-700 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500"
+                  className="w-full px-4 py-3 rounded-xl input-race text-white placeholder-gray-500 text-sm"
                   placeholder="Race title (e.g. Math Sprint Round 1)"
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   required
                   autoFocus
                 />
-                <label className="block">
-                  <span className="text-sm text-gray-400 block mb-1">Base Difficulty — {difficulty}/5</span>
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-gray-400">Base Difficulty</span>
+                    <span className={`text-sm font-bold ${DIFF_COLORS[difficulty]}`}>
+                      {DIFF_LABELS[difficulty]}
+                    </span>
+                  </div>
                   <input
                     type="range" min={1} max={5} step={1}
-                    className="w-full accent-green-500"
+                    className="w-full h-2 accent-yellow-400 cursor-pointer"
                     value={difficulty}
                     onChange={(e) => setDifficulty(Number(e.target.value))}
                   />
-                  <div className="flex justify-between text-xs text-gray-500 mt-1">
-                    <span>Easy</span><span>Hard</span>
+                  <div className="flex justify-between text-xs text-gray-600 mt-1">
+                    <span>Easy</span><span>Expert</span>
                   </div>
-                </label>
+                </div>
                 {createError && (
-                  <p className="bg-red-900/50 border border-red-600 text-red-300 text-sm px-3 py-2 rounded">
-                    {createError}
+                  <p className="bg-red-950/80 border border-red-500/40 text-red-400 text-sm px-3 py-2 rounded-lg">
+                    ⚠️ {createError}
                   </p>
                 )}
                 <div className="flex gap-3 pt-1">
                   <button
                     type="button"
                     onClick={() => setShowCreateForm(false)}
-                    className="flex-1 py-2 bg-gray-700 hover:bg-gray-600 rounded font-semibold text-sm transition-colors"
+                    className="flex-1 py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl font-semibold text-sm text-gray-300 transition-all"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
                     disabled={createLoading || !title.trim()}
-                    className="flex-1 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 rounded font-semibold text-sm transition-colors"
+                    className="flex-1 py-3 btn-green rounded-xl font-bold text-sm text-white disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
                   >
-                    {createLoading ? 'Creating…' : 'Create'}
+                    {createLoading ? '⚙️ Creating…' : '🏁 Create Race'}
                   </button>
                 </div>
               </form>
@@ -146,61 +181,84 @@ export default function TeacherDashboard() {
         )}
 
         {/* Race list */}
-        <h2 className="text-lg font-semibold text-gray-300 mb-4">My Races</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider">My Races</h2>
+          <button
+            onClick={loadRaces}
+            className="text-xs text-gray-600 hover:text-gray-400 transition-colors"
+          >
+            ↻ Refresh
+          </button>
+        </div>
+
         {listLoading ? (
-          <p className="text-gray-500 text-sm">Loading races…</p>
+          <div className="card-glass rounded-2xl p-10 text-center text-gray-500 text-sm">
+            Loading races…
+          </div>
         ) : myRaces.length === 0 ? (
-          <div className="bg-gray-800 rounded-xl p-10 text-center">
-            <p className="text-gray-400 text-lg mb-2">No races yet</p>
-            <p className="text-gray-500 text-sm mb-5">Create your first race and share the entry code with your students.</p>
+          <div className="card-glass rounded-2xl p-12 text-center border border-dashed border-gray-700">
+            <p className="text-4xl mb-4">🏁</p>
+            <p className="text-gray-300 text-lg font-bold mb-2">No races yet</p>
+            <p className="text-gray-500 text-sm mb-6">Create your first race and share the entry code with your class.</p>
             <button
               onClick={() => setShowCreateForm(true)}
-              className="px-6 py-2 bg-green-600 hover:bg-green-700 rounded-lg font-semibold transition-colors"
+              className="px-6 py-3 btn-green rounded-xl font-bold text-sm text-white"
             >
-              Create a Race
+              + Create a Race
             </button>
           </div>
         ) : (
           <div className="space-y-3">
-            {myRaces.map((race) => (
-              <div
-                key={race.raceId}
-                className="bg-gray-800 rounded-xl px-6 py-5 flex items-center justify-between gap-4"
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-3 mb-1">
-                    <h3 className="font-semibold text-white truncate">{race.title}</h3>
-                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${STATUS_BADGE[race.status]}`}>
-                      {race.status}
-                    </span>
+            {myRaces.map((race) => {
+              const cfg = STATUS_CONFIG[race.status] ?? STATUS_CONFIG.FINISHED;
+              return (
+                <div
+                  key={race.raceId}
+                  className="card-glass rounded-2xl px-6 py-5 flex items-center justify-between gap-4 hover:border-white/10 transition-all duration-200"
+                >
+                  <div className="flex items-center gap-4 flex-1 min-w-0">
+                    <div className={`w-2 h-2 rounded-full shrink-0 ${cfg.dot}`} />
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-3 mb-1.5 flex-wrap">
+                        <h3 className="font-bold text-white truncate">{race.title}</h3>
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full border ${cfg.badge}`}>
+                          {cfg.label}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-4 text-sm">
+                        <span className="text-gray-500">
+                          Code:{' '}
+                          <span className="font-mono font-black text-yellow-400 tracking-[0.2em] text-base">
+                            {race.entryCode}
+                          </span>
+                        </span>
+                        <span className={`font-medium text-xs ${DIFF_COLORS[race.baseDifficulty] ?? 'text-gray-400'}`}>
+                          ★ {DIFF_LABELS[race.baseDifficulty] ?? race.baseDifficulty}
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-4 text-sm text-gray-400">
-                    <span>
-                      Code: <span className="font-mono font-bold text-yellow-400 tracking-widest">{race.entryCode}</span>
-                    </span>
-                    <span>Difficulty: {race.baseDifficulty}/5</span>
-                  </div>
-                </div>
 
-                <div className="flex items-center gap-2 shrink-0">
-                  {race.status === 'LOBBY' && (
+                  <div className="flex items-center gap-2 shrink-0">
+                    {race.status === 'LOBBY' && (
+                      <button
+                        onClick={() => handleStart(race.raceId)}
+                        disabled={startingId === race.raceId}
+                        className="px-4 py-2 btn-green rounded-xl text-sm font-bold text-white disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+                      >
+                        {startingId === race.raceId ? '⚙️ Starting…' : '▶ Start'}
+                      </button>
+                    )}
                     <button
-                      onClick={() => handleStart(race.raceId)}
-                      disabled={startingId === race.raceId}
-                      className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 rounded-lg text-sm font-semibold transition-colors"
+                      onClick={() => navigate(`/teacher/race/${race.raceId}`)}
+                      className="px-4 py-2 btn-primary rounded-xl text-sm font-bold text-white"
                     >
-                      {startingId === race.raceId ? 'Starting…' : 'Start Race'}
+                      {race.status === 'LOBBY' ? '👁 Lobby' : '📊 View'}
                     </button>
-                  )}
-                  <button
-                    onClick={() => navigate(`/teacher/race/${race.raceId}`)}
-                    className="px-4 py-2 bg-blue-700 hover:bg-blue-600 rounded-lg text-sm font-semibold transition-colors"
-                  >
-                    {race.status === 'LOBBY' ? 'Lobby' : 'View'}
-                  </button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
