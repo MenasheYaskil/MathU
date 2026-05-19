@@ -18,6 +18,8 @@ public interface RaceParticipantRepository extends JpaRepository<RaceParticipant
 
     boolean existsByRaceIdAndUserId(Long raceId, Long userId);
 
+    long countByRaceId(Long raceId);
+
     // JOIN FETCH on user: loads all participants + their users in one query for leaderboard snapshots.
     // Prevents N+1 selects when SseController maps participants → ParticipantSnapshot DTOs.
     @Query("SELECT rp FROM RaceParticipant rp JOIN FETCH rp.user " +

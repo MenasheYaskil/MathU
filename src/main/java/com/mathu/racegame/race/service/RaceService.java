@@ -8,7 +8,11 @@ import com.mathu.racegame.race.repository.RaceRepository;
 import com.mathu.racegame.race.sse.SseService;
 import com.mathu.racegame.race.sse.dto.*;
 import com.mathu.racegame.user.entity.User;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.retry.annotation.Backoff;
+import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -37,11 +41,15 @@ public class RaceService {
         this.sseService = sseService;
     }
 
-    public Race createRace(String title, User teacher) {
+    public Race createRace(String title, User teacher, int baseDifficulty) {
+        if (baseDifficulty < 1 || baseDifficulty > 5) {
+            throw new IllegalArgumentException("baseDifficulty must be between 1 and 5");
+        }
         Race race = new Race();
         race.setTitle(title);
         race.setCreatedBy(teacher);
         race.setEntryCode(entryCodeGenerator.generateUnique());
+        race.setBaseDifficulty(baseDifficulty);
         return raceRepository.save(race);
     }
 
@@ -98,9 +106,20 @@ public class RaceService {
      * winner if this is the first participant to reach it.
      * Called by the game engine on every correct answer event.
      *
+     * {@code REQUIRES_NEW} ensures this method always owns its own transaction so that
+     * {@code @Retryable} can open a fresh transaction on each attempt after an
+     * {@link ObjectOptimisticLockingFailureException} (caused by the {@code @Version}
+     * column on {@link com.mathu.racegame.race.entity.RaceParticipant}).
+     *
      * Accesses participant.getUser() lazily within the transaction boundary —
      * safe since open-in-view is disabled but this method is @Transactional.
      */
+    @Retryable(
+            retryFor = ObjectOptimisticLockingFailureException.class,
+            maxAttempts = 3,
+            backoff = @Backoff(delay = 50, multiplier = 2.0)
+    )
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public RaceParticipant advanceParticipant(Long raceId, Long userId, int newPosition) {
         RaceParticipant participant = participantRepository
                 .findByRaceIdAndUserId(raceId, userId)
@@ -146,6 +165,9 @@ public class RaceService {
     }
 
     private Race findRaceById(Long raceId) {
+        if (raceId == null) {
+            throw new IllegalArgumentException("Race ID must not be null");
+        }
         return raceRepository.findById(raceId)
                 .orElseThrow(() -> new IllegalArgumentException("Race not found: " + raceId));
     }

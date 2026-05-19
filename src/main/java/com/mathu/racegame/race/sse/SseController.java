@@ -1,7 +1,10 @@
 package com.mathu.racegame.race.sse;
 
+import com.mathu.racegame.race.engine.GameEngineService;
+import com.mathu.racegame.race.engine.QuestionDispatch;
 import com.mathu.racegame.race.entity.Race;
 import com.mathu.racegame.race.entity.RaceParticipant;
+import com.mathu.racegame.race.entity.RaceStatus;
 import com.mathu.racegame.race.repository.RaceParticipantRepository;
 import com.mathu.racegame.race.repository.RaceRepository;
 import com.mathu.racegame.race.sse.dto.*;
@@ -22,16 +25,19 @@ import java.util.List;
 @RequestMapping("/api/races")
 public class SseController {
 
-    private final SseService sseService;
-    private final RaceRepository raceRepository;
+    private final SseService            sseService;
+    private final RaceRepository        raceRepository;
     private final RaceParticipantRepository participantRepository;
+    private final GameEngineService     gameEngineService;
 
     public SseController(SseService sseService,
                          RaceRepository raceRepository,
-                         RaceParticipantRepository participantRepository) {
-        this.sseService = sseService;
-        this.raceRepository = raceRepository;
+                         RaceParticipantRepository participantRepository,
+                         GameEngineService gameEngineService) {
+        this.sseService          = sseService;
+        this.raceRepository      = raceRepository;
         this.participantRepository = participantRepository;
+        this.gameEngineService   = gameEngineService;
     }
 
     /**
@@ -79,5 +85,51 @@ public class SseController {
                 new LeaderboardSnapshotData(raceId, race.getStatus().name(), snapshots));
 
         return sseService.subscribe(raceId, snapshot);
+    }
+
+    /**
+     * Student personal SSE channel.
+     *
+     * On connect:
+     *  1. Verifies the race is ACTIVE and the caller is a participant.
+     *  2. Calls GameEngineService.initPlayer() to initialise in-memory game state.
+     *  3. Sends QUESTION_DISPATCHED as the first (and only) event over this channel.
+     *
+     * Subsequent questions arrive in the HTTP response body of POST /answer.
+     * The student never receives other participants' data over this channel.
+     */
+    @GetMapping(value = "/{raceId}/my-events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter subscribeStudent(@PathVariable Long raceId,
+                                       @AuthenticationPrincipal User currentUser) {
+
+        Race race = raceRepository.findByIdWithCreator(raceId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Race not found"));
+
+        if (race.getStatus() != RaceStatus.ACTIVE) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Race is not active — connect after the teacher starts the race");
+        }
+
+        RaceParticipant participant = participantRepository
+                .findByRaceIdAndUserId(raceId, currentUser.getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN,
+                        "You are not a participant in this race"));
+
+        // Initialise in-memory engine state and dispatch the first question
+        QuestionDispatch firstQ = gameEngineService.initPlayer(
+                raceId,
+                currentUser.getId(),
+                participant.getId(),
+                race.getBaseDifficulty());
+
+        SseEventPayload initial = SseEventPayload.of(
+                SseEventType.QUESTION_DISPATCHED,
+                new QuestionDispatchedData(
+                        firstQ.questionText(),
+                        firstQ.questionToken(),
+                        firstQ.mode().name(),
+                        firstQ.dirtRoadRemaining()));
+
+        return sseService.subscribeParticipant(participant.getId(), initial);
     }
 }

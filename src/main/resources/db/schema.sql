@@ -105,3 +105,14 @@ CREATE TABLE template_variables (
     -- Primary generation lookup: SELECT ... WHERE variable_type = ? ORDER BY RAND() LIMIT 1
     INDEX idx_tv_variable_type (variable_type)
 ) ENGINE = InnoDB;
+
+-- ============================================================
+-- GAME ENGINE — Schema Additions
+-- Run after initial schema to add game engine fields.
+-- ============================================================
+
+-- Teacher sets one base difficulty (1–5) when creating a race.
+-- Highway = base+1, Dirt Road = base-1, Normal = base.
+ALTER TABLE races
+    ADD COLUMN base_difficulty TINYINT NOT NULL DEFAULT 2,
+    ADD CONSTRAINT chk_races_base_difficulty CHECK (base_difficulty BETWEEN 1 AND 5);

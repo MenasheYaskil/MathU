@@ -22,6 +22,10 @@ public class QuestionGeneratorService {
     // Matches any {ALL_CAPS_TOKEN} placeholder in a template string
     private static final Pattern PLACEHOLDER = Pattern.compile("\\{([A-Z_]+)\\}");
 
+    // Detects arithmetic expressions of the form "12 + 7 = ?" after variable substitution
+    private static final Pattern ARITHMETIC_PATTERN = Pattern.compile(
+            "(\\d+)\\s*([+\\-×÷*/x])\\s*(\\d+)\\s*=\\s*\\?", Pattern.CASE_INSENSITIVE);
+
     private final QuestionTemplateRepository templateRepository;
     private final TemplateVariableRepository variableRepository;
 
@@ -52,7 +56,35 @@ public class QuestionGeneratorService {
 
     private GeneratedQuestion resolveTemplate(QuestionTemplate template) {
         String resolved = replacePlaceholders(template.getTemplateText());
-        return GeneratedQuestion.of(resolved);
+        return tryComputeArithmeticAnswer(resolved)
+                .map(answer -> GeneratedQuestion.of(resolved, answer))
+                .orElseGet(() -> GeneratedQuestion.of(resolved));
+    }
+
+    /**
+     * Attempts to evaluate a simple arithmetic expression of the form "A op B = ?".
+     * Returns the string result if computable; empty if the pattern is not matched
+     * or the operation is undefined (e.g. division by zero).
+     */
+    private java.util.Optional<String> tryComputeArithmeticAnswer(String questionText) {
+        Matcher m = ARITHMETIC_PATTERN.matcher(questionText);
+        if (!m.find()) return java.util.Optional.empty();
+        try {
+            int a = Integer.parseInt(m.group(1));
+            String op = m.group(2);
+            int b = Integer.parseInt(m.group(3));
+            int result = switch (op) {
+                case "+"      -> a + b;
+                case "-"      -> a - b;
+                case "×", "*", "x" -> a * b;
+                case "÷", "/" -> { if (b == 0) yield Integer.MIN_VALUE; else yield a / b; }
+                default       -> Integer.MIN_VALUE;
+            };
+            if (result == Integer.MIN_VALUE) return java.util.Optional.empty();
+            return java.util.Optional.of(String.valueOf(result));
+        } catch (NumberFormatException e) {
+            return java.util.Optional.empty();
+        }
     }
 
     private String replacePlaceholders(String templateText) {

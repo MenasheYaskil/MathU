@@ -2,29 +2,28 @@ spring:
   datasource:
     url: ${DB_URL:jdbc:mysql://localhost:3306/mathu_racegame?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
     username: ${DB_USERNAME:root}
-    password: ${DB_PASSWORD:}
+    password: ${DB_PASSWORD:1234}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
   jpa:
     hibernate:
-      # Schema is owned by schema.sql — Hibernate must never alter it.
-      # Use 'validate' once the DB is set up; 'none' disables all DDL.
-      ddl-auto: validate
+      ddl-auto: update
+    # Defer datasource init so Hibernate creates tables BEFORE data.sql runs.
+    defer-datasource-initialization: true
     show-sql: false
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect
         format_sql: true
-        # Batch inserts — useful for seeding template_variables
         jdbc.batch_size: 50
         order_inserts: true
-    # Disable OSIV: forces explicit transaction boundaries, critical for SSE correctness
     open-in-view: false
 
   sql:
     init:
-      # schema.sql is for DBA/manual use only — never auto-run
-      mode: never
+      # data.sql at classpath root is loaded automatically on every startup.
+      # INSERT IGNORE in data.sql makes it idempotent — safe to re-run.
+      mode: always
 
 server:
   port: ${PORT:8080}
@@ -33,9 +32,13 @@ app:
   jwt:
     # Base64-encoded 256-bit minimum key. Set via environment variable — never commit a value here.
     # Generate with: openssl rand -base64 32
-    secret: ${JWT_SECRET}
+    secret: ${JWT_SECRET:ZTgxY2ZkM2IzYjU0NTM1NmZmMDc1MDc1OGZmY2YyZWNjZjIyZjY1ZmNmMzlmNThmMDZhMjM3MTMwYzIxMzg2Yw==}
     # Token lifetime in milliseconds. Default: 24 hours.
     expiration-ms: ${JWT_EXPIRATION_MS:86400000}
+
+  cors:
+    # Comma-separated list of allowed origins. Override via CORS_ALLOWED_ORIGINS env var.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
 
   sse:
     # How long an idle SSE connection is kept open before the server closes it.

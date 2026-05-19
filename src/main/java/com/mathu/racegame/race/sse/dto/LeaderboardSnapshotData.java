@@ -8,6 +8,6 @@ import java.util.List;
  */
 public record LeaderboardSnapshotData(
         Long raceId,
-        String raceStatus,
+        String status,
         List<ParticipantSnapshot> participants
 ) {}

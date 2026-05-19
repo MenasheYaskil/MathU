@@ -24,8 +24,13 @@ public class SseService {
 
     private static final Logger log = LoggerFactory.getLogger(SseService.class);
 
-    // Thread-safe registry: raceId → active emitters for that race room
+    // Thread-safe registry: raceId → active emitters for that race room (teacher channel)
     private final ConcurrentHashMap<Long, CopyOnWriteArrayList<SseEmitter>> raceEmitters =
+            new ConcurrentHashMap<>();
+
+    // Per-participant emitter registry for student-personal channels (/my-events).
+    // Each student has at most one active emitter at a time — reconnects replace the old entry.
+    private final ConcurrentHashMap<Long, SseEmitter> participantEmitters =
             new ConcurrentHashMap<>();
 
     private final ObjectMapper objectMapper;
@@ -85,11 +90,16 @@ public class SseService {
         String json = serialize(payload);
         if (json == null) return;
 
+        String eventName = payload.type().name();
+        if (eventName == null) {
+            throw new IllegalStateException("Event type name cannot be null");
+        }
+
         List<SseEmitter> dead = new ArrayList<>();
         for (SseEmitter emitter : emitters) {
             try {
                 emitter.send(SseEmitter.event()
-                        .name(payload.type().name())
+                        .name(eventName)
                         .data(json, MediaType.TEXT_PLAIN));
             } catch (IOException e) {
                 // Broken pipe / client disconnect — mark for removal
@@ -116,6 +126,66 @@ public class SseService {
         raceEmitters.keySet().forEach(raceId -> broadcastToRace(raceId, heartbeat));
     }
 
+    // =========================================================================
+    // Student-personal channel (/my-events)
+    // =========================================================================
+
+    /**
+     * Subscribes a student to their personal event channel.
+     * At most one active emitter per participant — a reconnect replaces the old entry.
+     * The initial payload (QUESTION_DISPATCHED) is sent immediately on subscribe.
+     */
+    public SseEmitter subscribeParticipant(Long participantId, SseEventPayload initialPayload) {
+        SseEmitter emitter = new SseEmitter(timeoutMs);
+
+        // Replace any stale emitter from a prior connection
+        SseEmitter previous = participantEmitters.put(participantId, emitter);
+        if (previous != null) {
+            try { previous.complete(); } catch (Exception ignored) {}
+        }
+
+        Runnable cleanup = () -> participantEmitters.remove(participantId, emitter);
+        emitter.onCompletion(cleanup);
+        emitter.onTimeout(cleanup);
+        emitter.onError(t -> {
+            log.debug("Student emitter error for participant {}: {}", participantId, t.getMessage());
+            cleanup.run();
+        });
+
+        sendToSingleParticipantEmitter(emitter, initialPayload, participantId);
+        return emitter;
+    }
+
+    /**
+     * Sends a payload to a single student's personal channel.
+     * Silently drops the event if the student has no active SSE connection.
+     */
+    public void sendToParticipant(Long participantId, SseEventPayload payload) {
+        SseEmitter emitter = participantEmitters.get(participantId);
+        if (emitter == null) return;
+        sendToSingleParticipantEmitter(emitter, payload, participantId);
+    }
+
+    private void sendToSingleParticipantEmitter(SseEmitter emitter, SseEventPayload payload,
+                                                Long participantId) {
+        String json = serialize(payload);
+        if (json == null) return;
+
+        String eventName = payload.type().name();
+        if (eventName == null) {
+            throw new IllegalStateException("Event type name cannot be null");
+        }
+
+        try {
+            emitter.send(SseEmitter.event()
+                    .name(eventName)
+                    .data(json, MediaType.TEXT_PLAIN));
+        } catch (IOException e) {
+            log.debug("Failed send to participant {} emitter", participantId);
+            participantEmitters.remove(participantId, emitter);
+        }
+    }
+
     public int activeConnectionCount(Long raceId) {
         CopyOnWriteArrayList<SseEmitter> list = raceEmitters.get(raceId);
         return list == null ? 0 : list.size();
@@ -124,9 +194,15 @@ public class SseService {
     private void sendToSingleEmitter(SseEmitter emitter, SseEventPayload payload, Long raceId) {
         String json = serialize(payload);
         if (json == null) return;
+
+        String eventName = payload.type().name();
+        if (eventName == null) {
+            throw new IllegalStateException("Event type name cannot be null");
+        }
+
         try {
             emitter.send(SseEmitter.event()
-                    .name(payload.type().name())
+                    .name(eventName)
                     .data(json, MediaType.TEXT_PLAIN));
         } catch (IOException e) {
             log.debug("Failed initial send for race {} emitter — likely connected too fast", raceId);

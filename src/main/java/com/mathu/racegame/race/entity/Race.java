@@ -45,6 +45,11 @@ public class Race {
     @OneToMany(mappedBy = "race", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private List<RaceParticipant> participants = new ArrayList<>();
 
+    // Set by teacher at race creation. Controls question difficulty per mode:
+    // Normal = base, Highway = base+1 (capped at 5), Dirt Road = base-1 (floored at 1)
+    @Column(name = "base_difficulty", nullable = false)
+    private int baseDifficulty = 2;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

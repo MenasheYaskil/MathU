@@ -19,7 +19,7 @@
     <description>MathU Real-Time Educational Racing Game Backend</description>
 
     <properties>
-        <java.version>21</java.version>
+        <java.version>17</java.version>
         <jjwt.version>0.12.6</jjwt.version>
     </properties>
 
@@ -79,6 +79,18 @@
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
             <optional>true</optional>
+        </dependency>
+
+        <!-- Spring Retry: @Retryable for optimistic locking on RaceParticipant writes -->
+        <dependency>
+            <groupId>org.springframework.retry</groupId>
+            <artifactId>spring-retry</artifactId>
+        </dependency>
+
+        <!-- AOP: required by spring-retry's @EnableRetry annotation processing -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
         </dependency>
 
         <!-- Test -->

@@ -1,11 +1,14 @@
+# ── Maven / Java ──────────────────────────────────────────────────────────────
 target/
 !.mvn/wrapper/maven-wrapper.jar
+*.class
+*.jar
+*.war
 log/
 logs/
 *.log
-*.class
 
-# IntelliJ IDEA / Eclipse
+# ── IDE ───────────────────────────────────────────────────────────────────────
 .idea/
 *.iws
 *.iml
@@ -15,7 +18,28 @@ logs/
 .settings/
 .vscode/
 
-# Claude AI
+# ── Claude AI / tooling ───────────────────────────────────────────────────────
 .claude/
 .claude-flow/
 .mcp.json
+
+# ── Frontend — dependencies and build output ──────────────────────────────────
+node_modules/
+dist/
+.cache/
+*.local
+
+# ── Environment / secrets ─────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Temporary / junk files ────────────────────────────────────────────────────
+/join.json
+/race.json
+/frontend/
+/)
+/0)
+/5)
+/Math.max(1
+/new
