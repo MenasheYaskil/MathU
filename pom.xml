@@ -19,7 +19,7 @@
     <description>MathU Real-Time Educational Racing Game Backend</description>
 
     <properties>
-        <java.version>25</java.version>
+        <java.version>17</java.version>
         <jjwt.version>0.12.6</jjwt.version>
     </properties>
 
@@ -127,7 +127,7 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.11.0</version>
                 <configuration>
-                    <release>25</release>
+                    <release>17</release>
                     <annotationProcessorPaths>
                         <path>
                             <groupId>org.projectlombok</groupId>
