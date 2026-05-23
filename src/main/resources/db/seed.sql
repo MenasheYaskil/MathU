@@ -75,13 +75,31 @@ INSERT IGNORE INTO template_variables (variable_type, value, metadata) VALUES
 
 -- ============================================================
 -- template_variables: OPERATOR
--- Excludes ÷ to guarantee integer answers at generation time.
+-- ÷ is excluded from the OPERATOR pool — division is handled
+-- via dedicated {DIVISOR} templates that enforce integer answers.
 -- ============================================================
 
 INSERT IGNORE INTO template_variables (variable_type, value, metadata) VALUES
     ('OPERATOR', '+', '{"symbol": "+", "operation": "addition"}'),
     ('OPERATOR', '-', '{"symbol": "-", "operation": "subtraction"}'),
     ('OPERATOR', '×', '{"symbol": "×", "operation": "multiplication"}');
+
+-- ============================================================
+-- template_variables: DIVISOR
+-- Small integers used as denominators in division templates.
+-- QuestionGeneratorService.ensureIntegerDivision() adjusts the
+-- numerator so the answer is always a clean whole number.
+-- D3 tier: 2–5 (easy quotients)
+-- D4 tier: 2–7 (medium)
+-- D5 tier: 2–10 (challenging)
+-- All three tiers draw from this unified pool; difficulty is
+-- controlled by which template rows are active per tier.
+-- ============================================================
+
+INSERT IGNORE INTO template_variables (variable_type, value) VALUES
+    ('DIVISOR', '2'), ('DIVISOR', '3'), ('DIVISOR', '4'),
+    ('DIVISOR', '5'), ('DIVISOR', '6'), ('DIVISOR', '7'),
+    ('DIVISOR', '8'), ('DIVISOR', '9'), ('DIVISOR', '10');
 
 -- ============================================================
 -- template_variables: NAME / ACTION / OBJECT / AMOUNT
@@ -169,5 +187,35 @@ INSERT IGNORE INTO question_templates (template_text, subject_area, difficulty_l
     ('{NUMBER} {OPERATOR} {NUMBER} = ?', 'ARITHMETIC', 5),
     ('{NUMBER} {OPERATOR} {NUMBER} = ?', 'ARITHMETIC', 5),
     ('{NUMBER} {OPERATOR} {NUMBER} = ?', 'ARITHMETIC', 5);
+
+-- ============================================================
+-- Division templates: {NUMBER} ÷ {DIVISOR} = ?
+--
+-- QuestionGeneratorService.ensureIntegerDivision() post-processes
+-- these to guarantee the numerator is a perfect multiple of the
+-- denominator — so answers are always clean integers.
+--
+-- D3: small divisors only (2–5), easiest division tier
+-- D4: medium range (2–7), balanced
+-- D5: full divisor range (2–10), hardest
+-- ============================================================
+
+-- D3 division (easy): small divisors, manageable products
+INSERT IGNORE INTO question_templates (template_text, subject_area, difficulty_level) VALUES
+    ('{NUMBER} ÷ {DIVISOR} = ?', 'ARITHMETIC', 3),
+    ('{NUMBER} ÷ {DIVISOR} = ?', 'ARITHMETIC', 3),
+    ('{NUMBER} ÷ {DIVISOR} = ?', 'ARITHMETIC', 3);
+
+-- D4 division (medium)
+INSERT IGNORE INTO question_templates (template_text, subject_area, difficulty_level) VALUES
+    ('{NUMBER} ÷ {DIVISOR} = ?', 'ARITHMETIC', 4),
+    ('{NUMBER} ÷ {DIVISOR} = ?', 'ARITHMETIC', 4),
+    ('{NUMBER} ÷ {DIVISOR} = ?', 'ARITHMETIC', 4);
+
+-- D5 division (hard): uses full number pool, any divisor 2–10
+INSERT IGNORE INTO question_templates (template_text, subject_area, difficulty_level) VALUES
+    ('{NUMBER} ÷ {DIVISOR} = ?', 'ARITHMETIC', 5),
+    ('{NUMBER} ÷ {DIVISOR} = ?', 'ARITHMETIC', 5),
+    ('{NUMBER} ÷ {DIVISOR} = ?', 'ARITHMETIC', 5);
 
 COMMIT;

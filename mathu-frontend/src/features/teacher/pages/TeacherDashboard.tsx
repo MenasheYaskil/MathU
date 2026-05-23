@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { races as racesApi } from '../../../services/apiService';
 import { useAuthStore } from '../../../stores/authStore';
-import type { Race } from '../../../types/api';
+import type { Race, RaceLeaderboardEntry } from '../../../types/api';
 
 const STATUS_CONFIG: Record<string, { label: string; dot: string; badge: string }> = {
   LOBBY:    { label: 'LOBBY',    dot: 'bg-yellow-400', badge: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30' },
@@ -22,6 +22,12 @@ export default function TeacherDashboard() {
   const [myRaces, setMyRaces] = useState<Race[]>([]);
   const [listLoading, setListLoading] = useState(true);
   const [startingId, setStartingId] = useState<number | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+
+  // History modal state
+  const [historyRace, setHistoryRace] = useState<Race | null>(null);
+  const [historyBoard, setHistoryBoard] = useState<RaceLeaderboardEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   const loadRaces = async () => {
     try {
@@ -50,6 +56,32 @@ export default function TeacherDashboard() {
     }
   };
 
+  const handleDelete = useCallback(async (race: Race) => {
+    if (!window.confirm(`Delete "${race.title}"? This cannot be undone.`)) return;
+    setDeletingId(race.raceId);
+    try {
+      await racesApi.deleteRace(race.raceId);
+      setMyRaces((prev) => prev.filter((r) => r.raceId !== race.raceId));
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to delete race');
+    } finally {
+      setDeletingId(null);
+    }
+  }, []);
+
+  const openHistory = useCallback(async (race: Race) => {
+    setHistoryRace(race);
+    setHistoryLoading(true);
+    try {
+      const board = await racesApi.getLeaderboard(race.raceId);
+      setHistoryBoard(board.sort((a, b) => b.position - a.position));
+    } catch {
+      setHistoryBoard([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
   const handleStart = async (raceId: number) => {
     setStartingId(raceId);
     try {
@@ -63,6 +95,14 @@ export default function TeacherDashboard() {
 
   const activeCount = myRaces.filter((r) => r.status === 'ACTIVE').length;
   const lobbyCount = myRaces.filter((r) => r.status === 'LOBBY').length;
+
+  const [copiedId, setCopiedId] = useState<number | null>(null);
+  const copyCode = useCallback((raceId: number, code: string) => {
+    navigator.clipboard.writeText(code).then(() => {
+      setCopiedId(raceId);
+      setTimeout(() => setCopiedId(null), 1500);
+    });
+  }, []);
 
   const DIFF_LABELS = ['', 'Beginner', 'Easy', 'Medium', 'Hard', 'Expert'];
   const DIFF_COLORS = ['', 'text-green-400', 'text-lime-400', 'text-yellow-400', 'text-orange-400', 'text-red-400'];
@@ -117,6 +157,90 @@ export default function TeacherDashboard() {
             </div>
           ))}
         </div>
+
+        {/* Race History Modal */}
+        {historyRace && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+            <div className="card-glass rounded-2xl p-8 w-full max-w-md shadow-2xl animate-bounce-in">
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">🏆</span>
+                  <div>
+                    <h2 className="text-lg font-black text-white truncate max-w-xs">{historyRace.title}</h2>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {historyRace.finishedAt
+                        ? `Finished ${new Date(historyRace.finishedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+                        : 'Race completed'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setHistoryRace(null)}
+                  className="w-8 h-8 flex items-center justify-center rounded-xl bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-all text-lg"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {historyRace.winnerUsername && (
+                <div
+                  className="flex items-center gap-3 px-4 py-3 rounded-xl mb-5"
+                  style={{ background: 'rgba(255,215,0,0.08)', border: '1px solid rgba(255,215,0,0.2)' }}
+                >
+                  <span className="text-2xl">🥇</span>
+                  <div>
+                    <p className="text-xs text-gray-500 uppercase tracking-wider">Winner</p>
+                    <p className="font-black text-yellow-400">{historyRace.winnerUsername}</p>
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <p className="text-xs font-bold text-gray-600 uppercase tracking-wider mb-3">
+                  Final Standings
+                </p>
+                {historyLoading ? (
+                  <p className="text-gray-500 text-sm text-center py-4">Loading…</p>
+                ) : historyBoard.length === 0 ? (
+                  <p className="text-gray-600 text-sm text-center py-4">No standings available</p>
+                ) : (
+                  <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+                    {historyBoard.map((entry, i) => (
+                      <div
+                        key={entry.userId}
+                        className={`flex items-center gap-3 px-3 py-2 rounded-xl text-sm ${i === 0 ? 'bg-yellow-500/10 border border-yellow-500/15' : 'bg-white/3'}`}
+                      >
+                        <span className="w-6 text-center shrink-0">
+                          {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : <span className="text-gray-600 text-xs">{i + 1}</span>}
+                        </span>
+                        <span className={`flex-1 font-semibold truncate ${i === 0 ? 'text-yellow-400' : 'text-gray-300'}`}>
+                          {entry.username}
+                        </span>
+                        <span className="font-mono text-xs text-gray-500 shrink-0">{entry.position} pts</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-3 mt-6">
+                <button
+                  onClick={() => handleDelete(historyRace).then(() => setHistoryRace(null))}
+                  disabled={deletingId === historyRace.raceId}
+                  className="flex-1 py-2.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-xl text-sm font-semibold text-red-400 transition-all disabled:opacity-40"
+                >
+                  {deletingId === historyRace.raceId ? '⌛ Deleting…' : '🗑️ Delete Race'}
+                </button>
+                <button
+                  onClick={() => setHistoryRace(null)}
+                  className="flex-1 py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-sm font-semibold text-gray-300 transition-all"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Create Race Modal */}
         {showCreateForm && (
@@ -226,12 +350,19 @@ export default function TeacherDashboard() {
                         </span>
                       </div>
                       <div className="flex items-center gap-4 text-sm">
-                        <span className="text-gray-500">
-                          Code:{' '}
-                          <span className="font-mono font-black text-yellow-400 tracking-[0.2em] text-base">
+                        <button
+                          onClick={() => copyCode(race.raceId, race.entryCode)}
+                          className="flex items-center gap-1.5 group/copy"
+                          title="Copy entry code"
+                        >
+                          <span className="text-gray-500 text-sm">Code</span>
+                          <span className={`font-mono font-black tracking-[0.2em] text-base transition-colors duration-150 ${copiedId === race.raceId ? 'text-green-400' : 'text-yellow-400'}`}>
                             {race.entryCode}
                           </span>
-                        </span>
+                          <span className={`text-xs transition-all duration-150 ${copiedId === race.raceId ? 'text-green-400' : 'text-gray-600 group-hover/copy:text-gray-400'}`}>
+                            {copiedId === race.raceId ? '✓' : '⎘'}
+                          </span>
+                        </button>
                         <span className={`font-medium text-xs ${DIFF_COLORS[race.baseDifficulty] ?? 'text-gray-400'}`}>
                           ★ {DIFF_LABELS[race.baseDifficulty] ?? race.baseDifficulty}
                         </span>
@@ -249,12 +380,31 @@ export default function TeacherDashboard() {
                         {startingId === race.raceId ? '⚙️ Starting…' : '▶ Start'}
                       </button>
                     )}
-                    <button
-                      onClick={() => navigate(`/teacher/race/${race.raceId}`)}
-                      className="px-4 py-2 btn-primary rounded-xl text-sm font-bold text-white"
-                    >
-                      {race.status === 'LOBBY' ? '👁 Lobby' : '📊 View'}
-                    </button>
+                    {race.status === 'FINISHED' ? (
+                      <button
+                        onClick={() => openHistory(race)}
+                        className="px-4 py-2 btn-primary rounded-xl text-sm font-bold text-white"
+                      >
+                        📊 Results
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => navigate(`/teacher/race/${race.raceId}`)}
+                        className="px-4 py-2 btn-primary rounded-xl text-sm font-bold text-white"
+                      >
+                        {race.status === 'LOBBY' ? '👁 Lobby' : '📊 View'}
+                      </button>
+                    )}
+                    {race.status !== 'ACTIVE' && (
+                      <button
+                        onClick={() => handleDelete(race)}
+                        disabled={deletingId === race.raceId}
+                        className="w-9 h-9 flex items-center justify-center rounded-xl bg-red-500/8 hover:bg-red-500/20 border border-red-500/15 hover:border-red-500/35 text-red-500/60 hover:text-red-400 transition-all disabled:opacity-30"
+                        title="Delete race"
+                      >
+                        <span className="text-sm">{deletingId === race.raceId ? '⌛' : '🗑️'}</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               );

@@ -3,6 +3,7 @@ import type {
   EngineStallData,
   LeaderboardSnapshotData,
   ParticipantJoinedData,
+  PlayerKickedData,
   PositionUpdateData,
   PowerUpData,
   QuestionDispatchedData,
@@ -22,6 +23,7 @@ export interface RaceEventHandlers {
   onLeaderboardSnapshot?: Handler<LeaderboardSnapshotData>;
   onPositionUpdate?: Handler<PositionUpdateData>;
   onParticipantJoined?: Handler<ParticipantJoinedData>;
+  onPlayerKicked?: Handler<PlayerKickedData>;
   onRaceStart?: Handler<RaceStartData>;
   onRaceFinish?: Handler<RaceFinishData>;
   onEngineStall?: Handler<EngineStallData>;
@@ -57,6 +59,7 @@ export function subscribeToRace(
   listen<LeaderboardSnapshotData>(es, 'LEADERBOARD_SNAPSHOT', handlers.onLeaderboardSnapshot);
   listen<PositionUpdateData>(es, 'POSITION_UPDATE', handlers.onPositionUpdate);
   listen<ParticipantJoinedData>(es, 'PARTICIPANT_JOINED', handlers.onParticipantJoined);
+  listen<PlayerKickedData>(es, 'PLAYER_KICKED', handlers.onPlayerKicked);
   listen<RaceStartData>(es, 'RACE_START', handlers.onRaceStart);
   listen<RaceFinishData>(es, 'RACE_FINISH', handlers.onRaceFinish);
   listen<EngineStallData>(es, 'ENGINE_STALL', handlers.onEngineStall);

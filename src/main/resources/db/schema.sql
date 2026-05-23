@@ -116,3 +116,14 @@ CREATE TABLE template_variables (
 ALTER TABLE races
     ADD COLUMN base_difficulty TINYINT NOT NULL DEFAULT 2,
     ADD CONSTRAINT chk_races_base_difficulty CHECK (base_difficulty BETWEEN 1 AND 5);
+
+-- ============================================================
+-- DIVISION QUESTIONS — Schema Addition
+-- Add DIVISOR to the variable_type ENUM so division question
+-- seeds (seed.sql) can be inserted.
+-- Run after schema.sql initial setup.
+-- ============================================================
+
+ALTER TABLE template_variables
+    MODIFY COLUMN variable_type
+        ENUM('NAME','ACTION','OBJECT','NUMBER','OPERATOR','AMOUNT','DIVISOR') NOT NULL;

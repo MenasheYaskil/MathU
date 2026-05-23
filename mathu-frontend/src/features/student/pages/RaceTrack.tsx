@@ -19,7 +19,7 @@ export default function RaceTrack() {
   const token = useAuthStore((s) => s.token);
   const username = useAuthStore((s) => s.username);
 
-  const { leaderboard, currentQuestion, setLeaderboard, updatePosition, setQuestion, reset } =
+  const { leaderboard, currentQuestion, setLeaderboard, updatePosition, addParticipant, removeParticipant, setQuestion, reset } =
     useRaceStore();
 
   const [answer, setAnswer] = useState('');
@@ -32,6 +32,7 @@ export default function RaceTrack() {
   const [feedback, setFeedback] = useState<{ text: string; correct: boolean } | null>(null);
   const [powerUpMsg, setPowerUpMsg] = useState<{ text: string; type: 'good' | 'bad' } | null>(null);
   const [winner, setWinner] = useState<string | null>(null);
+  const [isKicked, setIsKicked] = useState(false);
 
   const id = Number(raceId);
   const isStalled = stallUntil !== null && Date.now() < stallUntil;
@@ -87,6 +88,12 @@ export default function RaceTrack() {
         if (d.status === 'ACTIVE') openPersonalChannelRef.current();
       },
       onPositionUpdate: (d) => updatePosition(d.userId, d.position),
+      onParticipantJoined: (d) =>
+        addParticipant({ userId: d.userId, username: d.username, currentPosition: 0 }),
+      onPlayerKicked: (d) => {
+        removeParticipant(d.userId);
+        if (d.username === username) setIsKicked(true);
+      },
       onRaceStart: () => openPersonalChannelRef.current(),
       onRaceFinish: (d) => setWinner(d.winnerUsername),
       onPowerUp: (data) => {
@@ -169,6 +176,30 @@ export default function RaceTrack() {
   const myRank = sorted.findIndex((p) => p.username === username) + 1;
   const timerPct = (timeLeft / QUESTION_TIME_SEC) * 100;
   const timerUrgent = timeLeft <= 10;
+
+  // ── Kicked screen ─────────────────────────────────────────────────────────────
+  if (isKicked) {
+    return (
+      <div
+        className="min-h-screen text-white flex flex-col items-center justify-center gap-6 p-8"
+        style={{ background: 'linear-gradient(160deg, #08090f 0%, #0d1117 100%)' }}
+      >
+        <div className="text-center animate-bounce-in space-y-4">
+          <div className="text-7xl animate-float">🚪</div>
+          <h1 className="text-3xl font-black text-white">Removed from Race</h1>
+          <p className="text-gray-400 text-sm max-w-xs mx-auto">
+            Your teacher removed you from this race. You can join a different race anytime.
+          </p>
+        </div>
+        <button
+          onClick={() => navigate('/student/join')}
+          className="px-8 py-3 btn-primary rounded-xl font-bold text-white text-sm"
+        >
+          ← Join Another Race
+        </button>
+      </div>
+    );
+  }
 
   // ── Race finish screen ────────────────────────────────────────────────────────
   if (winner) {
@@ -431,19 +462,49 @@ export default function RaceTrack() {
               </form>
 
               {feedback && (
-                <div className={`mt-3 px-4 py-2 rounded-lg text-sm font-bold text-center animate-slide-up ${
+                <div className={`mt-3 px-4 py-2.5 rounded-xl text-sm font-black text-center ${
                   feedback.correct
-                    ? 'bg-green-500/15 border border-green-500/30 text-green-400'
-                    : 'bg-red-500/15 border border-red-500/30 text-red-400'
+                    ? 'animate-answer-pop bg-green-500/15 border border-green-500/35 text-green-400'
+                    : 'animate-shake bg-red-500/15 border border-red-500/35 text-red-400'
                 }`}>
-                  {feedback.correct ? '✓' : '✗'} {feedback.text}
+                  {feedback.correct ? '✓ ' : '✗ '}{feedback.text}
                 </div>
               )}
             </div>
           ) : !isStalled && !decisionPending ? (
-            <div className="flex-1 flex flex-col items-center justify-center card-glass rounded-2xl gap-3">
-              <span className="text-5xl animate-float">⏳</span>
-              <p className="text-gray-500 font-semibold">Waiting for the race to start…</p>
+            <div className="flex-1 flex flex-col card-glass rounded-2xl p-6">
+              <div className="flex items-center gap-4 mb-6">
+                <span className="text-4xl animate-float shrink-0">⏳</span>
+                <div>
+                  <p className="text-lg font-black text-white">Waiting for race to start…</p>
+                  <p className="text-gray-500 text-sm">Your teacher will kick things off shortly.</p>
+                </div>
+              </div>
+              {sorted.length > 0 && (
+                <div>
+                  <p className="text-xs font-bold text-gray-600 uppercase tracking-wider mb-3">
+                    In the lobby · {sorted.length} racer{sorted.length !== 1 ? 's' : ''}
+                  </p>
+                  <div className="space-y-2">
+                    {sorted.map((p) => {
+                      const isMe = p.username === username;
+                      return (
+                        <div
+                          key={p.userId}
+                          className={`flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all ${isMe ? 'border border-yellow-500/25' : ''}`}
+                          style={{ background: isMe ? 'rgba(255,215,0,0.07)' : 'rgba(255,255,255,0.03)' }}
+                        >
+                          <span className="text-base">{isMe ? '🏎️' : '🚗'}</span>
+                          <span className={`text-sm font-bold flex-1 truncate ${isMe ? 'text-yellow-400' : 'text-gray-300'}`}>
+                            {p.username}
+                          </span>
+                          {isMe && <span className="text-xs text-gray-600">You</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           ) : null}
         </section>

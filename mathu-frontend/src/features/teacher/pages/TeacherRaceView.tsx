@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../../stores/authStore';
 import { subscribeToRace } from '../../../services/sseService';
@@ -12,6 +12,7 @@ import type {
   PowerUpData,
   DecisionEventData,
   ParticipantJoinedData,
+  PlayerKickedData,
   RaceStatus,
 } from '../../../types/api';
 
@@ -51,12 +52,39 @@ export default function TeacherRaceView() {
   const [liveEvents, setLiveEvents] = useState<LiveEvent[]>([]);
   const [sseError, setSseError] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [kickingId, setKickingId] = useState<number | null>(null);
+
+  // Rank-change flash: track previous rank per userId and mark who just moved up
+  const prevRanksRef = useRef<Map<number, number>>(new Map());
+  const [risingIds, setRisingIds] = useState<Set<number>>(new Set());
 
   const pushEvent = useCallback((emoji: string, text: string) => {
     setLiveEvents((prev) => [{ id: eventCounter++, emoji, text, ts: Date.now() }, ...prev].slice(0, 20));
   }, []);
 
   const sorted = [...leaderboard].sort((a, b) => b.currentPosition - a.currentPosition);
+
+  // Detect which players moved up in rank after each sort and flash them gold
+  useEffect(() => {
+    const rising = new Set<number>();
+    sorted.forEach((p, newRank) => {
+      const prev = prevRanksRef.current.get(p.userId);
+      if (prev !== undefined && newRank < prev) rising.add(p.userId);
+      prevRanksRef.current.set(p.userId, newRank);
+    });
+    if (rising.size === 0) return;
+    setRisingIds(rising);
+    const t = setTimeout(() => setRisingIds(new Set()), 1200);
+    return () => clearTimeout(t);
+  }, [sorted]);
+
+  const copyCode = useCallback(() => {
+    navigator.clipboard.writeText(entryCode).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }, [entryCode]);
 
   useEffect(() => {
     if (!token) { navigate('/'); return; }
@@ -85,6 +113,10 @@ export default function TeacherRaceView() {
             : [...prev, { userId: d.userId, username: d.username, currentPosition: 0 }]
         );
       },
+      onPlayerKicked: (d: PlayerKickedData) => {
+        setLeaderboard((prev) => prev.filter((p) => p.userId !== d.userId));
+        pushEvent('🚪', `${d.username} was removed`);
+      },
       onRaceStart: () => { setRaceStatus('ACTIVE'); pushEvent('🏁', 'Race started!'); },
       onRaceFinish: (d: RaceFinishData) => {
         setRaceStatus('FINISHED');
@@ -111,11 +143,31 @@ export default function TeacherRaceView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, token]);
 
+  const handleKick = useCallback(async (userId: number, name: string) => {
+    if (!window.confirm(`Remove ${name} from the race?`)) return;
+    setKickingId(userId);
+    try {
+      await racesApi.kickPlayer(id, userId);
+      setLeaderboard((prev) => prev.filter((p) => p.userId !== userId));
+      pushEvent('🚪', `${name} was removed`);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to remove player');
+    } finally {
+      setKickingId(null);
+    }
+  }, [id, pushEvent]);
+
   const handleStart = async () => {
     setIsStarting(true);
-    try { await racesApi.start(id); }
-    catch (err) { alert(err instanceof Error ? err.message : 'Failed to start race'); }
-    finally { setIsStarting(false); }
+    try {
+      await racesApi.start(id);
+      setRaceStatus('ACTIVE');
+      pushEvent('🏁', 'Race started!');
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to start race');
+    } finally {
+      setIsStarting(false);
+    }
   };
 
   const cfg = statusCfg(raceStatus);
@@ -201,12 +253,18 @@ export default function TeacherRaceView() {
 
         <div className="flex items-center gap-4">
           {entryCode && (
-            <div className="text-center">
-              <p className="text-xs text-gray-500 uppercase tracking-wider mb-0.5">Entry Code</p>
-              <span className="font-mono font-black text-yellow-400 tracking-[0.25em] text-2xl">
+            <button
+              onClick={copyCode}
+              className="text-center group transition-all duration-150 hover:opacity-80 active:scale-95"
+              title="Click to copy"
+            >
+              <p className="text-xs text-gray-500 uppercase tracking-wider mb-0.5">
+                {copied ? '✓ Copied!' : 'Entry Code · click to copy'}
+              </p>
+              <span className={`font-mono font-black tracking-[0.25em] text-2xl transition-colors duration-150 ${copied ? 'text-green-400' : 'text-yellow-400'}`}>
                 {entryCode}
               </span>
-            </div>
+            </button>
           )}
           {raceStatus === 'LOBBY' && (
             <button
@@ -253,6 +311,10 @@ export default function TeacherRaceView() {
                   participant={p}
                   index={i}
                   rank={i + 1}
+                  rankUp={risingIds.has(p.userId)}
+                  canKick={raceStatus !== 'FINISHED'}
+                  isKicking={kickingId === p.userId}
+                  onKick={handleKick}
                 />
               ))}
             </div>
@@ -267,19 +329,25 @@ export default function TeacherRaceView() {
             <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-4">
               🏆 Standings
             </h2>
-            <ol className="space-y-2.5">
+            <ol className="space-y-2">
               {sorted.map((p, i) => (
-                <li key={p.userId} className="flex items-center gap-2.5">
+                <li
+                  key={p.userId}
+                  className={`flex items-center gap-2.5 px-2 py-1.5 rounded-lg transition-all duration-300 ${risingIds.has(p.userId) ? 'animate-rank-up' : ''}`}
+                >
                   <span className="w-6 text-center text-sm shrink-0">
                     {i < 3 ? MEDALS[i] : <span className="text-gray-600 text-xs">{i + 1}</span>}
                   </span>
                   <div
-                    className="w-2 h-2 rounded-full shrink-0"
+                    className="w-2 h-2 rounded-full shrink-0 transition-all duration-300"
                     style={{ backgroundColor: COLORS[i % COLORS.length] }}
                   />
-                  <span className="flex-1 text-sm font-semibold truncate text-gray-200">
+                  <span className={`flex-1 text-sm font-semibold truncate transition-colors duration-300 ${risingIds.has(p.userId) ? 'text-yellow-300' : 'text-gray-200'}`}>
                     {p.username}
                   </span>
+                  {risingIds.has(p.userId) && (
+                    <span className="text-yellow-400 text-xs font-black shrink-0">▲</span>
+                  )}
                   <span className="font-mono text-xs text-gray-500 shrink-0">
                     {p.currentPosition}
                   </span>
@@ -321,42 +389,53 @@ function TrackLane({
   participant,
   index,
   rank,
+  rankUp,
+  canKick,
+  isKicking,
+  onKick,
 }: {
   participant: ParticipantSnapshot;
   index: number;
   rank: number;
+  rankUp: boolean;
+  canKick?: boolean;
+  isKicking?: boolean;
+  onKick?: (userId: number, username: string) => void;
 }) {
   const pct = Math.min(100, (participant.currentPosition / TRACK_LENGTH) * 100);
   const color = COLORS[index % COLORS.length];
   const car = CAR_EMOJIS[index % CAR_EMOJIS.length];
 
   return (
-    <div className="flex items-center gap-3 group">
-      {/* Rank + name */}
+    <div className={`flex items-center gap-3 group rounded-xl px-2 py-1 transition-all duration-300 ${rankUp ? 'animate-rank-up' : ''}`}>
+      {/* Rank badge */}
       <div className="w-8 text-center shrink-0">
-        <span className="text-xs text-gray-600">{rank <= 3 ? ['🥇','🥈','🥉'][rank-1] : rank}</span>
+        <span className={`text-xs transition-all duration-300 ${rankUp ? 'scale-125 inline-block' : ''}`}>
+          {rank <= 3 ? ['🥇', '🥈', '🥉'][rank - 1] : <span className="text-gray-600">{rank}</span>}
+        </span>
       </div>
-      <span className="w-28 text-sm font-semibold text-right truncate shrink-0 text-gray-300 group-hover:text-white transition-colors">
+      <span className={`w-28 text-sm font-semibold text-right truncate shrink-0 transition-colors duration-300 ${rankUp ? 'text-yellow-300' : 'text-gray-300 group-hover:text-white'}`}>
         {participant.username}
       </span>
 
       {/* Track */}
       <div
-        className="flex-1 relative h-12 rounded-xl overflow-hidden"
+        className="flex-1 relative h-12 rounded-xl overflow-hidden transition-all duration-300"
         style={{
           background: 'linear-gradient(to bottom, #1a1a28, #12121c, #1a1a28)',
-          border: '1px solid rgba(255,255,255,0.06)',
+          border: rankUp
+            ? '1px solid rgba(255,215,0,0.35)'
+            : '1px solid rgba(255,255,255,0.06)',
+          boxShadow: rankUp ? '0 0 12px rgba(255,215,0,0.15)' : 'none',
         }}
       >
         {/* Center dashed line */}
-        <div
-          className="absolute top-1/2 left-0 right-0 border-t border-dashed opacity-10"
-          style={{ borderColor: 'rgba(255,255,255,0.3)' }}
-        />
-        {/* Lane edge stripes */}
-        <div className="absolute top-0 left-0 right-0 h-1 opacity-20"
+        <div className="absolute top-1/2 left-0 right-0 border-t border-dashed opacity-10"
+          style={{ borderColor: 'rgba(255,255,255,0.3)' }} />
+        {/* Lane edge accents */}
+        <div className="absolute top-0 left-0 right-0 h-px opacity-20"
           style={{ background: `linear-gradient(to right, transparent, ${color}, transparent)` }} />
-        <div className="absolute bottom-0 left-0 right-0 h-1 opacity-20"
+        <div className="absolute bottom-0 left-0 right-0 h-px opacity-20"
           style={{ background: `linear-gradient(to right, transparent, ${color}, transparent)` }} />
 
         {/* Progress fill */}
@@ -364,37 +443,49 @@ function TrackLane({
           className="absolute top-0 left-0 bottom-0 transition-all duration-700 ease-out"
           style={{
             width: `${Math.max(1, pct)}%`,
-            background: `linear-gradient(to right, ${color}18, ${color}40)`,
+            background: `linear-gradient(to right, ${color}18, ${color}45)`,
           }}
         />
 
-        {/* Car */}
+        {/* Car — cubic-bezier gives a realistic deceleration feel */}
         <div
-          className="absolute top-1/2 -translate-y-1/2 text-2xl transition-all duration-700 ease-out drop-shadow"
-          style={{ left: `calc(${Math.max(0, pct)}% - 20px)` }}
+          className="absolute top-1/2 -translate-y-1/2 text-2xl drop-shadow"
+          style={{
+            left: `calc(${Math.max(0, pct)}% - 20px)`,
+            transition: 'left 0.65s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
+          }}
         >
           {car}
         </div>
 
-        {/* Checkered finish line */}
-        <div
-          className="absolute right-0 top-0 bottom-0 w-4 flex flex-col overflow-hidden"
-        >
+        {/* Checkered finish flag */}
+        <div className="absolute right-0 top-0 bottom-0 w-4 flex flex-col overflow-hidden">
           {Array.from({ length: 8 }).map((_, i) => (
-            <div
-              key={i}
-              className="flex-1"
-              style={{ background: i % 2 === 0 ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.7)' }}
-            />
+            <div key={i} className="flex-1"
+              style={{ background: i % 2 === 0 ? 'rgba(255,255,255,0.65)' : 'rgba(0,0,0,0.65)' }} />
           ))}
         </div>
       </div>
 
-      {/* Position */}
-      <span className="w-14 text-right font-mono text-sm font-bold shrink-0"
-        style={{ color }}>
+      {/* Position counter — turns gold on rank-up */}
+      <span
+        className="w-14 text-right font-mono text-sm font-black shrink-0 transition-colors duration-300"
+        style={{ color: rankUp ? '#FFD700' : color }}
+      >
         {participant.currentPosition}
       </span>
+
+      {/* Kick button — visible on lane hover, teacher-only */}
+      {canKick && onKick && (
+        <button
+          onClick={() => onKick(participant.userId, participant.username)}
+          disabled={isKicking}
+          className="opacity-0 group-hover:opacity-100 transition-opacity duration-150 shrink-0 w-7 h-7 flex items-center justify-center rounded-lg bg-red-500/10 hover:bg-red-500/25 text-red-400 border border-red-500/20 hover:border-red-500/40 disabled:opacity-30 disabled:cursor-not-allowed"
+          title={`Remove ${participant.username}`}
+        >
+          <span className="text-xs font-black">{isKicking ? '⌛' : '✕'}</span>
+        </button>
+      )}
     </div>
   );
 }

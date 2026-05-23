@@ -6,10 +6,13 @@ import com.mathu.racegame.race.entity.RaceParticipant;
 import com.mathu.racegame.race.repository.RaceParticipantRepository;
 import com.mathu.racegame.race.service.RaceService;
 import com.mathu.racegame.race.sse.dto.*;
+import com.mathu.racegame.race.sse.event.PlayerKickedEvent;
+import com.mathu.racegame.race.sse.event.RaceFinishedEvent;
 import com.mathu.racegame.race.sse.event.RaceUpdateEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -110,10 +113,23 @@ public class GameEngineService {
 
     /**
      * Removes all in-memory state for every participant in the given race.
-     * Call this when the race finishes or is abandoned.
+     * Triggered automatically via {@link RaceFinishedEvent} after the transaction commits.
      */
     public void cleanupRace(Long raceId) {
         stateMap.values().removeIf(s -> s.getRaceId().equals(raceId));
+        log.debug("Cleaned up in-memory state for race {}", raceId);
+    }
+
+    @EventListener
+    public void onRaceFinished(RaceFinishedEvent event) {
+        cleanupRace(event.getRaceId());
+    }
+
+    @EventListener
+    public void onPlayerKicked(PlayerKickedEvent event) {
+        stateMap.remove(event.getParticipantId());
+        log.debug("Removed game state for kicked participant {} in race {}",
+                event.getParticipantId(), event.getRaceId());
     }
 
     // =========================================================================

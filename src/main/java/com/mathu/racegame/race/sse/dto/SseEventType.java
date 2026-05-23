@@ -5,6 +5,7 @@ public enum SseEventType {
     LEADERBOARD_SNAPSHOT,
     POSITION_UPDATE,
     PARTICIPANT_JOINED,
+    PLAYER_KICKED,            // teacher removed a participant; payload: PlayerKickedData
     RACE_START,
     RACE_FINISH,
     HEARTBEAT,

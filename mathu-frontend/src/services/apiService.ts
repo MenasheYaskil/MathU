@@ -9,6 +9,7 @@ import type {
   LoginResponse,
   QuestionDispatchedData,
   Race,
+  RaceLeaderboardEntry,
   RegisterRequest,
 } from '../types/api';
 
@@ -62,4 +63,13 @@ export const races = {
 
   chooseDecisionPath: (raceId: number, body: DecisionRequest): Promise<QuestionDispatchedData> =>
     request(`/api/races/${raceId}/decision`, { method: 'POST', body: JSON.stringify(body) }),
+
+  kickPlayer: (raceId: number, userId: number): Promise<void> =>
+    request(`/api/races/${raceId}/participants/${userId}`, { method: 'DELETE' }),
+
+  deleteRace: (raceId: number): Promise<void> =>
+    request(`/api/races/${raceId}`, { method: 'DELETE' }),
+
+  getLeaderboard: (raceId: number): Promise<RaceLeaderboardEntry[]> =>
+    request(`/api/races/${raceId}/leaderboard`),
 };

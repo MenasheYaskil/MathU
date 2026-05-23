@@ -7,7 +7,10 @@ import com.mathu.racegame.race.repository.RaceParticipantRepository;
 import com.mathu.racegame.race.repository.RaceRepository;
 import com.mathu.racegame.race.sse.SseService;
 import com.mathu.racegame.race.sse.dto.*;
+import com.mathu.racegame.race.sse.event.PlayerKickedEvent;
+import com.mathu.racegame.race.sse.event.RaceFinishedEvent;
 import com.mathu.racegame.user.entity.User;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.retry.annotation.Backoff;
 import org.springframework.retry.annotation.Retryable;
@@ -30,15 +33,37 @@ public class RaceService {
     private final RaceParticipantRepository participantRepository;
     private final EntryCodeGenerator entryCodeGenerator;
     private final SseService sseService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public RaceService(RaceRepository raceRepository,
                        RaceParticipantRepository participantRepository,
                        EntryCodeGenerator entryCodeGenerator,
-                       SseService sseService) {
+                       SseService sseService,
+                       ApplicationEventPublisher eventPublisher) {
         this.raceRepository = raceRepository;
         this.participantRepository = participantRepository;
         this.entryCodeGenerator = entryCodeGenerator;
         this.sseService = sseService;
+        this.eventPublisher = eventPublisher;
+    }
+
+    /**
+     * Hard-deletes a LOBBY or FINISHED race and all its participants (cascade).
+     * Active races are blocked — they must reach FINISHED status before deletion.
+     */
+    public void deleteRace(Long raceId, User requestingTeacher) {
+        Race race = findRaceById(raceId);
+
+        if (!race.getCreatedBy().getId().equals(requestingTeacher.getId())) {
+            throw new SecurityException("Only the race creator can delete the race");
+        }
+        if (race.getStatus() == RaceStatus.ACTIVE) {
+            throw new IllegalStateException("Cannot delete an active race — let it finish first");
+        }
+
+        // Race.participants is CascadeType.ALL + orphanRemoval=true:
+        // deleting the Race cascades to all RaceParticipant rows automatically.
+        raceRepository.delete(race);
     }
 
     public Race createRace(String title, User teacher, int baseDifficulty) {
@@ -149,6 +174,40 @@ public class RaceService {
         return participantRepository.findByRaceIdOrderByCurrentPositionDesc(raceId);
     }
 
+    /**
+     * Removes a student from the race and broadcasts a PLAYER_KICKED SSE event to all clients.
+     * The student's personal SSE channel is closed and their in-memory engine state is removed
+     * via a {@link PlayerKickedEvent} (avoids a circular dependency with GameEngineService).
+     */
+    public void kickPlayer(Long raceId, Long targetUserId, User requestingTeacher) {
+        Race race = findRaceById(raceId);
+
+        if (!race.getCreatedBy().getId().equals(requestingTeacher.getId())) {
+            throw new SecurityException("Only the race creator can kick players");
+        }
+        if (race.getStatus() == RaceStatus.FINISHED) {
+            throw new IllegalStateException("Cannot kick players from a finished race");
+        }
+
+        RaceParticipant participant = participantRepository
+                .findByRaceIdAndUserId(raceId, targetUserId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Participant not found in race " + raceId));
+
+        final String username      = participant.getUser().getUsername();
+        final Long   participantId = participant.getId();
+        participantRepository.delete(participant);
+
+        final SseEventPayload kickEvent = SseEventPayload.of(
+                SseEventType.PLAYER_KICKED,
+                new PlayerKickedData(targetUserId, username));
+        afterCommit(() -> {
+            sseService.broadcastToRace(raceId, kickEvent);
+            sseService.completeParticipantChannel(participantId);
+            eventPublisher.publishEvent(new PlayerKickedEvent(this, raceId, participantId));
+        });
+    }
+
     private void declareWinnerIfNotYetDeclared(Long raceId, User winner) {
         Race race = findRaceById(raceId);
         if (race.getStatus() == RaceStatus.ACTIVE) {
@@ -160,7 +219,10 @@ public class RaceService {
             final SseEventPayload finishEvent = SseEventPayload.of(
                     SseEventType.RACE_FINISH,
                     new RaceFinishData(raceId, winner.getId(), winner.getUsername()));
-            afterCommit(() -> sseService.broadcastToRace(raceId, finishEvent));
+            afterCommit(() -> {
+                sseService.broadcastToRace(raceId, finishEvent);
+                eventPublisher.publishEvent(new RaceFinishedEvent(this, raceId));
+            });
         }
     }
 

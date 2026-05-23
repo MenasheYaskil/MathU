@@ -27,6 +27,13 @@ export default {
         'race-enter': 'raceEnter 0.6s ease-out',
         'pop-in': 'popIn 0.25s ease-out',
         'ticker': 'ticker 0.4s ease-out',
+        // Answer feedback
+        'answer-pop': 'answerPop 0.35s cubic-bezier(0.36, 0.07, 0.19, 0.97)',
+        'shake': 'shake 0.45s cubic-bezier(0.36, 0.07, 0.19, 0.97)',
+        // Leaderboard rank change
+        'rank-up': 'rankUp 1.1s ease-out',
+        // OTP code box
+        'otp-fill': 'otpFill 0.2s ease-out',
       },
       keyframes: {
         slideDown: {
@@ -70,6 +77,29 @@ export default {
         ticker: {
           '0%': { opacity: '0', transform: 'translateX(20px)' },
           '100%': { opacity: '1', transform: 'translateX(0)' },
+        },
+        answerPop: {
+          '0%': { transform: 'scale(0.88)', opacity: '0' },
+          '55%': { transform: 'scale(1.06)' },
+          '100%': { transform: 'scale(1)', opacity: '1' },
+        },
+        shake: {
+          '0%, 100%': { transform: 'translateX(0)' },
+          '15%': { transform: 'translateX(-6px)' },
+          '30%': { transform: 'translateX(6px)' },
+          '45%': { transform: 'translateX(-4px)' },
+          '60%': { transform: 'translateX(4px)' },
+          '75%': { transform: 'translateX(-2px)' },
+        },
+        rankUp: {
+          '0%': { backgroundColor: 'transparent', boxShadow: 'none' },
+          '18%': { backgroundColor: 'rgba(255,215,0,0.13)', boxShadow: '0 0 18px rgba(255,215,0,0.28)' },
+          '100%': { backgroundColor: 'transparent', boxShadow: 'none' },
+        },
+        otpFill: {
+          '0%': { transform: 'scale(0.8)', opacity: '0.4' },
+          '60%': { transform: 'scale(1.08)' },
+          '100%': { transform: 'scale(1)', opacity: '1' },
         },
       },
     },

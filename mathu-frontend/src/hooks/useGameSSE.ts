@@ -78,6 +78,7 @@ export function useGameSSE(
       listenTyped(es, 'LEADERBOARD_SNAPSHOT', h.onLeaderboardSnapshot);
       listenTyped(es, 'POSITION_UPDATE',       h.onPositionUpdate);
       listenTyped(es, 'PARTICIPANT_JOINED',     h.onParticipantJoined);
+      listenTyped(es, 'PLAYER_KICKED',          h.onPlayerKicked);
       listenTyped(es, 'RACE_START',             h.onRaceStart);
       listenTyped(es, 'RACE_FINISH',            h.onRaceFinish);
       listenTyped(es, 'ENGINE_STALL',           h.onEngineStall);
