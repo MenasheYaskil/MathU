@@ -2,22 +2,16 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../../stores/authStore';
 import { useRaceStore } from '../../../stores/raceStore';
-import { subscribeToRace, subscribeToMyEvents } from '../../../services/sseService';
+import { useGameSSE } from '../../../hooks/useGameSSE';
 import { races as racesApi } from '../../../services/apiService';
-import type {
-  LeaderboardSnapshotData,
-  PositionUpdateData,
-  QuestionDispatchedData,
-  RaceFinishData,
-} from '../../../types/api';
 
 const TRACK_LENGTH = 1000;
 const QUESTION_TIME_SEC = 30;
-
 const COLORS = [
   '#ef4444', '#3b82f6', '#22c55e', '#f59e0b',
   '#a855f7', '#ec4899', '#06b6d4', '#f97316',
 ];
+const MEDALS = ['🥇', '🥈', '🥉'];
 
 export default function RaceTrack() {
   const { raceId } = useParams<{ raceId: string }>();
@@ -25,37 +19,25 @@ export default function RaceTrack() {
   const token = useAuthStore((s) => s.token);
   const username = useAuthStore((s) => s.username);
 
-  const { leaderboard, currentQuestion, setLeaderboard, updatePosition, setQuestion, reset } =
+  const { leaderboard, currentQuestion, setLeaderboard, updatePosition, addParticipant, removeParticipant, setQuestion, reset } =
     useRaceStore();
 
   const [answer, setAnswer] = useState('');
-  const [sseError, setSseError] = useState(false);
   const [decisionPending, setDecisionPending] = useState(false);
   const [isDecisionLoading, setIsDecisionLoading] = useState(false);
-
-  // Timer state
   const [timeLeft, setTimeLeft] = useState(QUESTION_TIME_SEC);
   const questionTokenRef = useRef<string | null>(null);
-
-  // Stall state
   const [stallUntil, setStallUntil] = useState<number | null>(null);
   const [stallRemaining, setStallRemaining] = useState(0);
-
-  // Feedback
   const [feedback, setFeedback] = useState<{ text: string; correct: boolean } | null>(null);
-
-  // Power-up notification
-  const [powerUpMsg, setPowerUpMsg] = useState<string | null>(null);
-
-  // Race finish state
+  const [powerUpMsg, setPowerUpMsg] = useState<{ text: string; type: 'good' | 'bad' } | null>(null);
   const [winner, setWinner] = useState<string | null>(null);
+  const [isKicked, setIsKicked] = useState(false);
 
   const id = Number(raceId);
-
   const isStalled = stallUntil !== null && Date.now() < stallUntil;
 
-  // ── Countdown timer ─────────────────────────────────────────────────────────
-  // Reset timer when a new question arrives
+  // Reset timer on new question
   useEffect(() => {
     if (!currentQuestion) return;
     if (questionTokenRef.current === currentQuestion.questionToken) return;
@@ -65,7 +47,7 @@ export default function RaceTrack() {
     setFeedback(null);
   }, [currentQuestion]);
 
-  // Tick the timer every second
+  // Countdown tick
   useEffect(() => {
     if (!currentQuestion || decisionPending || isStalled) return;
     if (timeLeft <= 0) return;
@@ -73,74 +55,70 @@ export default function RaceTrack() {
     return () => clearTimeout(t);
   }, [timeLeft, currentQuestion, decisionPending, isStalled]);
 
-  // ── Stall ticker ─────────────────────────────────────────────────────────────
+  // Stall ticker
   useEffect(() => {
     if (!stallUntil) return;
     const tick = setInterval(() => {
       const rem = Math.max(0, stallUntil - Date.now());
       setStallRemaining(Math.ceil(rem / 1000));
-      if (rem === 0) {
-        setStallUntil(null);
-        clearInterval(tick);
-      }
+      if (rem === 0) { setStallUntil(null); clearInterval(tick); }
     }, 200);
     return () => clearInterval(tick);
   }, [stallUntil]);
 
-  // ── SSE subscriptions ────────────────────────────────────────────────────────
+  // Redirect if token is gone (logout, session expiry)
   useEffect(() => {
-    if (!token) { navigate('/'); return; }
+    if (!token) navigate('/');
+  }, [token, navigate]);
 
-    let myEventsUnsub: (() => void) | null = null;
+  // Clean up race store state on unmount
+  useEffect(() => () => { reset(); }, [reset]);
 
-    const connectMyEvents = () => {
-      if (myEventsUnsub) return;
-      myEventsUnsub = subscribeToMyEvents(
-        id, token,
-        (q: QuestionDispatchedData) => { setQuestion(q); setFeedback(null); setDecisionPending(false); },
-        () => setSseError(true),
-      );
-    };
+  // Break the circular dependency: handlers reference openPersonalChannel, which is
+  // returned by useGameSSE, which receives the handlers. The ref is assigned
+  // synchronously below the hook call, so it holds the real function before any
+  // async SSE event can fire.
+  const openPersonalChannelRef = useRef<() => void>(() => undefined);
 
-    const unsubRace = subscribeToRace(id, token, {
-      onLeaderboardSnapshot: (d: LeaderboardSnapshotData) => {
+  const { sseError, openPersonalChannel } = useGameSSE(
+    id,
+    {
+      onLeaderboardSnapshot: (d) => {
         setLeaderboard(d.raceId, d.status, d.participants);
-        if (d.status === 'ACTIVE') connectMyEvents();
+        if (d.status === 'ACTIVE') openPersonalChannelRef.current();
       },
-      onPositionUpdate: (d: PositionUpdateData) => updatePosition(d.userId, d.position),
-      onRaceStart: () => connectMyEvents(),
-      onRaceFinish: (d: RaceFinishData) => setWinner(d.winnerUsername),
+      onPositionUpdate: (d) => updatePosition(d.userId, d.position),
+      onParticipantJoined: (d) =>
+        addParticipant({ userId: d.userId, username: d.username, currentPosition: 0 }),
+      onPlayerKicked: (d) => {
+        removeParticipant(d.userId);
+        if (d.username === username) setIsKicked(true);
+      },
+      onRaceStart: () => openPersonalChannelRef.current(),
+      onRaceFinish: (d) => setWinner(d.winnerUsername),
       onPowerUp: (data) => {
-        if (data.type === 'TURBO') setPowerUpMsg('⚡ TURBO! You got a speed boost!');
-        else setPowerUpMsg('🔧 Flat Tire! Engine stalled…');
-        setTimeout(() => setPowerUpMsg(null), 3000);
+        if (data.type === 'TURBO') {
+          setPowerUpMsg({ text: '⚡ TURBO! Speed boost activated!', type: 'good' });
+        } else {
+          setPowerUpMsg({ text: '🔧 Flat Tire! Engine slowed…', type: 'bad' });
+        }
+        setTimeout(() => setPowerUpMsg(null), 3500);
       },
-      onError: () => setSseError(true),
-    });
+    },
+    (q) => { setQuestion(q); setFeedback(null); setDecisionPending(false); },
+  );
 
-    return () => {
-      unsubRace();
-      myEventsUnsub?.();
-      reset();
-    };
-  }, [id, token, navigate, setLeaderboard, updatePosition, setQuestion, reset]);
+  openPersonalChannelRef.current = openPersonalChannel;
 
-  // ── Answer submission ────────────────────────────────────────────────────────
   const processAnswerResult = useCallback(async (result: Awaited<ReturnType<typeof racesApi.submitAnswer>>) => {
     if (result.stalledNow) {
       setStallUntil(Date.now() + result.stallDurationMs);
       setStallRemaining(Math.ceil(result.stallDurationMs / 1000));
-      if (!result.correct) {
-        setFeedback({ text: 'Wrong answer — engine stalled!', correct: false });
-      }
+      if (!result.correct) setFeedback({ text: 'Wrong answer — engine stalled!', correct: false });
       setAnswer('');
       return;
     }
-    if (result.decisionEventPending) {
-      setDecisionPending(true);
-      setFeedback(null);
-      return;
-    }
+    if (result.decisionEventPending) { setDecisionPending(true); setFeedback(null); return; }
     if (result.nextQuestionText && result.nextQuestionToken) {
       setQuestion({
         questionText: result.nextQuestionText,
@@ -169,17 +147,12 @@ export default function RaceTrack() {
     }
   }, [id, answer, currentQuestion, isStalled, processAnswerResult]);
 
-  // Auto-submit when timer runs out (blank = wrong)
   const autoSubmitRef = useRef(false);
   useEffect(() => {
     if (timeLeft === 0 && currentQuestion && !decisionPending && !isStalled && !autoSubmitRef.current) {
       autoSubmitRef.current = true;
-      racesApi.submitAnswer(id, {
-        questionToken: currentQuestion.questionToken,
-        answer: '',
-      }).then(processAnswerResult).catch(() => {}).finally(() => {
-        autoSubmitRef.current = false;
-      });
+      racesApi.submitAnswer(id, { questionToken: currentQuestion.questionToken, answer: '' })
+        .then(processAnswerResult).catch(() => {}).finally(() => { autoSubmitRef.current = false; });
     }
     if (timeLeft > 0) autoSubmitRef.current = false;
   }, [timeLeft, currentQuestion, decisionPending, isStalled, id, processAnswerResult]);
@@ -198,69 +171,124 @@ export default function RaceTrack() {
     }
   }, [id, setQuestion]);
 
-  // Sorted leaderboard
   const sorted = [...leaderboard].sort((a, b) => b.currentPosition - a.currentPosition);
   const myPos = leaderboard.find((p) => p.username === username)?.currentPosition ?? 0;
   const myRank = sorted.findIndex((p) => p.username === username) + 1;
+  const timerPct = (timeLeft / QUESTION_TIME_SEC) * 100;
+  const timerUrgent = timeLeft <= 10;
 
-  // ── Render ───────────────────────────────────────────────────────────────────
-
-  // Race finished screen
-  if (winner) {
+  // ── Kicked screen ─────────────────────────────────────────────────────────────
+  if (isKicked) {
     return (
-      <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center gap-6 p-8">
-        <div className="text-8xl">🏆</div>
-        <h1 className="text-4xl font-bold text-yellow-400">{winner} wins!</h1>
-        <p className="text-gray-400">Race is over. Final standings:</p>
-        <ol className="bg-gray-800 rounded-xl p-6 w-full max-w-sm space-y-2">
-          {sorted.map((p, i) => (
-            <li
-              key={p.userId}
-              className={`flex items-center gap-3 ${p.username === username ? 'text-yellow-400 font-bold' : ''}`}
-            >
-              <span className="w-6 text-gray-500">{i + 1}.</span>
-              <span className="flex-1">{p.username}</span>
-              <span className="font-mono text-sm text-gray-400">{p.currentPosition}</span>
-            </li>
-          ))}
-        </ol>
+      <div
+        className="min-h-screen text-white flex flex-col items-center justify-center gap-6 p-8"
+        style={{ background: 'linear-gradient(160deg, #08090f 0%, #0d1117 100%)' }}
+      >
+        <div className="text-center animate-bounce-in space-y-4">
+          <div className="text-7xl animate-float">🚪</div>
+          <h1 className="text-3xl font-black text-white">Removed from Race</h1>
+          <p className="text-gray-400 text-sm max-w-xs mx-auto">
+            Your teacher removed you from this race. You can join a different race anytime.
+          </p>
+        </div>
         <button
           onClick={() => navigate('/student/join')}
-          className="px-6 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold transition-colors"
+          className="px-8 py-3 btn-primary rounded-xl font-bold text-white text-sm"
         >
-          Back to Lobby
+          ← Join Another Race
         </button>
       </div>
     );
   }
 
+  // ── Race finish screen ────────────────────────────────────────────────────────
+  if (winner) {
+    const iWon = winner === username;
+    return (
+      <div
+        className="min-h-screen text-white flex flex-col items-center justify-center gap-6 p-8 relative overflow-hidden"
+        style={{ background: iWon ? 'radial-gradient(ellipse at center, #1a1000 0%, #08090f 70%)' : 'linear-gradient(160deg, #08090f, #0d1117)' }}
+      >
+        {iWon && (
+          <div className="absolute inset-0 pointer-events-none">
+            {Array.from({ length: 16 }).map((_, i) => (
+              <span key={i} className="absolute text-xl animate-float select-none opacity-20"
+                style={{ left: `${Math.random() * 95}%`, top: `${Math.random() * 90}%`, animationDelay: `${i * 0.2}s` }}>
+                {['⭐', '🌟', '✨', '🎉'][i % 4]}
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="relative text-center animate-bounce-in space-y-3">
+          <div className="text-7xl animate-float">{iWon ? '🏆' : '🏁'}</div>
+          <h1 className={`text-4xl font-black ${iWon ? 'text-gold' : 'text-white'}`}>
+            {iWon ? 'You Win!' : `${winner} wins!`}
+          </h1>
+          <p className="text-gray-400 text-sm">Race complete · Final standings</p>
+        </div>
+
+        <div className="card-glass rounded-2xl p-6 w-full max-w-xs space-y-2.5">
+          {sorted.map((p, i) => (
+            <div key={p.userId} className={`flex items-center gap-3 text-sm py-1 ${p.username === username ? 'font-black text-yellow-400' : 'text-gray-300'}`}>
+              <span className="w-7 text-center">{i < 3 ? MEDALS[i] : <span className="text-gray-600">{i+1}</span>}</span>
+              <span className="flex-1 truncate">{p.username}</span>
+              <span className="font-mono text-xs text-gray-500">{p.currentPosition}</span>
+            </div>
+          ))}
+        </div>
+
+        <button
+          onClick={() => navigate('/student/join')}
+          className="px-8 py-3 btn-primary rounded-xl font-bold text-white text-sm"
+        >
+          ← Back to Lobby
+        </button>
+      </div>
+    );
+  }
+
+  // ── Main game HUD ─────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-gray-900 text-white flex flex-col gap-3 p-4">
-      {/* Decision event overlay */}
+    <div
+      className="min-h-screen text-white flex flex-col"
+      style={{ background: 'linear-gradient(160deg, #08090f 0%, #0d1117 100%)' }}
+    >
+      {/* Decision crossroads overlay */}
       {decisionPending && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
-          <div className="bg-gray-800 rounded-2xl p-8 w-full max-w-sm mx-4 text-center flex flex-col gap-4">
-            <p className="text-5xl">🚦</p>
-            <h2 className="text-2xl font-bold">Crossroads!</h2>
-            <p className="text-gray-400 text-sm">Choose your path to continue racing.</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm"
+          style={{ background: 'rgba(0,0,0,0.85)' }}>
+          <div className="card-glass rounded-3xl p-8 w-full max-w-sm mx-4 text-center space-y-5 animate-bounce-in border-gold-glow">
+            <div className="text-5xl animate-float">🚦</div>
+            <h2 className="text-2xl font-black">Crossroads!</h2>
+            <p className="text-gray-500 text-sm">Your progress earns you a choice. Choose wisely.</p>
+
             <button
               onClick={() => handleDecisionChoice('HIGHWAY')}
               disabled={isDecisionLoading}
-              className="py-4 rounded-xl bg-yellow-500 hover:bg-yellow-400 text-black font-bold text-lg transition-colors disabled:opacity-50"
+              className="w-full py-5 rounded-2xl text-black font-black text-lg transition-all duration-200 disabled:opacity-50"
+              style={{
+                background: 'linear-gradient(135deg, #FFD700, #FFA500)',
+                boxShadow: '0 4px 24px rgba(255,215,0,0.3)',
+              }}
             >
-              🛣 Highway
-              <span className="block text-sm font-normal mt-1 opacity-80">
-                1 hard question · huge reward (3×) · risky!
+              🛣️ Highway
+              <span className="block text-sm font-semibold mt-1 opacity-75">
+                1 hard question · 3× reward · Risk of setback!
               </span>
             </button>
+
             <button
               onClick={() => handleDecisionChoice('DIRT_ROAD')}
               disabled={isDecisionLoading}
-              className="py-4 rounded-xl bg-green-700 hover:bg-green-600 text-white font-bold text-lg transition-colors disabled:opacity-50"
+              className="w-full py-5 rounded-2xl text-white font-black text-lg transition-all duration-200 disabled:opacity-50"
+              style={{
+                background: 'linear-gradient(135deg, #166534, #15803d)',
+                boxShadow: '0 4px 24px rgba(22,101,52,0.3)',
+              }}
             >
               🌿 Dirt Road
-              <span className="block text-sm font-normal mt-1 opacity-80">
-                3 easy questions · safe & steady
+              <span className="block text-sm font-semibold mt-1 opacity-75">
+                3 easy questions · Steady & safe
               </span>
             </button>
           </div>
@@ -269,97 +297,156 @@ export default function RaceTrack() {
 
       {/* SSE error */}
       {sseError && (
-        <div className="bg-red-900/60 border border-red-600 text-red-300 px-4 py-2 rounded text-sm text-center">
-          Connection lost — please refresh the page.
+        <div className="bg-red-950/80 border-b border-red-600/40 text-red-400 px-4 py-2 text-sm text-center">
+          ⚠️ Connection lost — please refresh.
         </div>
       )}
 
-      {/* Power-up notification */}
+      {/* Power-up toast */}
       {powerUpMsg && (
-        <div className="bg-yellow-500/20 border border-yellow-500 text-yellow-300 px-4 py-2 rounded text-sm text-center font-semibold">
-          {powerUpMsg}
+        <div
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-40 px-6 py-3 rounded-2xl font-bold text-sm text-center animate-slide-down shadow-2xl"
+          style={{
+            background: powerUpMsg.type === 'good'
+              ? 'linear-gradient(135deg, #1a3a1a, #14532d)'
+              : 'linear-gradient(135deg, #3a1a1a, #7f1d1d)',
+            border: powerUpMsg.type === 'good'
+              ? '1px solid rgba(34,197,94,0.4)'
+              : '1px solid rgba(239,68,68,0.4)',
+            boxShadow: powerUpMsg.type === 'good'
+              ? '0 4px 24px rgba(34,197,94,0.2)'
+              : '0 4px 24px rgba(239,68,68,0.2)',
+          }}
+        >
+          {powerUpMsg.text}
         </div>
       )}
 
-      {/* Visual race track */}
-      <section className="bg-gray-800 rounded-xl p-4">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-gray-400 uppercase tracking-wider">Race Track</span>
-          <span className="text-xs text-gray-400">
-            {myRank > 0 ? `You are #${myRank} · ` : ''}{myPos} / {TRACK_LENGTH}
-          </span>
+      {/* HUD top bar */}
+      <header
+        className="px-5 py-3 border-b border-white/5 flex items-center gap-4"
+        style={{ background: 'rgba(8,9,15,0.92)', backdropFilter: 'blur(12px)' }}
+      >
+        <span className="text-lg">🏎️</span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-3">
+            <span className="font-black text-white truncate">{username}</span>
+            {myRank > 0 && (
+              <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-blue-600/20 text-blue-400 border border-blue-500/30">
+                {myRank <= 3 ? MEDALS[myRank - 1] : `#${myRank}`} Place
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-gray-500 font-mono">{myPos} / {TRACK_LENGTH} pts</p>
         </div>
-        <div className="space-y-2">
+        {currentQuestion && !decisionPending && !isStalled && (
+          <TimerRing timeLeft={timeLeft} pct={timerPct} urgent={timerUrgent} />
+        )}
+      </header>
+
+      {/* Mini race track */}
+      <div className="px-5 py-4 border-b border-white/5"
+        style={{ background: 'rgba(13,17,23,0.5)' }}>
+        <div className="space-y-1.5">
           {sorted.map((p, i) => {
             const pct = Math.min(100, (p.currentPosition / TRACK_LENGTH) * 100);
             const color = COLORS[i % COLORS.length];
             const isMe = p.username === username;
             return (
               <div key={p.userId} className="flex items-center gap-2">
-                <span className={`w-20 text-xs text-right truncate shrink-0 ${isMe ? 'text-yellow-400 font-bold' : 'text-gray-400'}`}>
+                <span className={`w-16 text-right text-xs truncate shrink-0 ${isMe ? 'text-yellow-400 font-black' : 'text-gray-600'}`}>
                   {p.username}
                 </span>
-                <div className="flex-1 bg-gray-700 rounded-full h-5 relative overflow-visible">
+                <div
+                  className="flex-1 relative h-4 rounded-full overflow-hidden"
+                  style={{ background: 'rgba(17,24,39,0.8)', border: `1px solid ${isMe ? 'rgba(255,215,0,0.2)' : 'rgba(255,255,255,0.04)'}` }}
+                >
                   <div
-                    className="h-full rounded-full transition-all duration-500 ease-out"
-                    style={{ width: `${Math.max(1, pct)}%`, backgroundColor: color + '88' }}
+                    className="absolute top-0 left-0 bottom-0 transition-all duration-500 ease-out rounded-full"
+                    style={{ width: `${Math.max(1, pct)}%`, background: `linear-gradient(to right, ${color}50, ${color}90)` }}
                   />
                   <span
-                    className="absolute top-1/2 -translate-y-1/2 text-base transition-all duration-500"
-                    style={{ left: `${Math.max(0, pct - 2)}%` }}
+                    className="absolute top-1/2 -translate-y-1/2 text-xs transition-all duration-500"
+                    style={{ left: `calc(${Math.max(0, pct)}% - 10px)` }}
                   >
-                    🚗
+                    {isMe ? '🏎️' : '🚗'}
                   </span>
-                  <div className="absolute right-0 top-0 bottom-0 w-px bg-yellow-400 opacity-50" />
                 </div>
               </div>
             );
           })}
           {sorted.length === 0 && (
-            <p className="text-gray-600 text-sm text-center py-2">Waiting for race to start…</p>
+            <p className="text-gray-700 text-xs text-center py-1">Waiting for race to start…</p>
           )}
         </div>
-      </section>
+      </div>
 
-      <div className="flex gap-3 flex-1">
+      {/* Main content area */}
+      <div className="flex flex-1 gap-0 overflow-hidden">
         {/* Question panel */}
-        <section className="flex-1 bg-gray-800 rounded-xl p-5 flex flex-col min-h-0">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
-              {currentQuestion?.mode === 'HIGHWAY'
-                ? '🛣 Highway Question'
-                : currentQuestion?.mode === 'DIRT_ROAD'
-                ? `🌿 Dirt Road (${currentQuestion.dirtRoadRemaining} left)`
-                : 'Your Question'}
-            </h2>
-            {currentQuestion && !decisionPending && !isStalled && (
-              <TimerBadge timeLeft={timeLeft} />
-            )}
-          </div>
+        <section className="flex-1 p-5 flex flex-col min-h-0">
+          {/* Mode indicator */}
+          {currentQuestion && (
+            <div className="flex items-center gap-2 mb-4">
+              {currentQuestion.mode === 'HIGHWAY' ? (
+                <span className="text-xs font-bold px-3 py-1 rounded-full bg-yellow-500/15 text-yellow-400 border border-yellow-500/30">
+                  🛣️ Highway · High Stakes
+                </span>
+              ) : currentQuestion.mode === 'DIRT_ROAD' ? (
+                <span className="text-xs font-bold px-3 py-1 rounded-full bg-green-500/15 text-green-400 border border-green-500/30">
+                  🌿 Dirt Road · {currentQuestion.dirtRoadRemaining} left
+                </span>
+              ) : (
+                <span className="text-xs font-bold px-3 py-1 rounded-full bg-blue-500/15 text-blue-400 border border-blue-500/30">
+                  🏁 Question
+                </span>
+              )}
+            </div>
+          )}
 
           {/* Stall display */}
-          {isStalled && (
-            <div className="flex-1 flex flex-col items-center justify-center gap-3">
+          {isStalled ? (
+            <div className="flex-1 flex flex-col items-center justify-center gap-4 card-glass rounded-2xl">
               <div className="text-6xl animate-bounce">💥</div>
-              <p className="text-xl font-bold text-red-400">Engine Stalled!</p>
-              <p className="text-gray-400 text-sm">Resuming in {stallRemaining}s…</p>
-              <div className="w-48 bg-gray-700 rounded-full h-2">
+              <p className="text-2xl font-black text-red-400">Engine Stalled!</p>
+              <p className="text-gray-500 text-sm">Resuming in {stallRemaining}s…</p>
+              <div className="w-48 h-2 bg-gray-800 rounded-full overflow-hidden">
                 <div
-                  className="h-2 rounded-full bg-red-500 transition-all"
+                  className="h-full bg-red-500 rounded-full transition-all duration-300"
                   style={{ width: `${(stallRemaining / 4) * 100}%` }}
                 />
               </div>
             </div>
-          )}
+          ) : !decisionPending && currentQuestion ? (
+            <div className="flex-1 flex flex-col card-glass rounded-2xl p-6">
+              {/* Question text */}
+              <div className="flex-1 flex items-center justify-center">
+                <p className="text-3xl font-black text-center leading-snug">{currentQuestion.questionText}</p>
+              </div>
 
-          {!isStalled && !decisionPending && currentQuestion ? (
-            <>
-              <p className="text-2xl font-bold flex-1 leading-snug">{currentQuestion.questionText}</p>
+              {/* Timer bar */}
+              <div className="mt-4 mb-5">
+                <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all duration-1000 ease-linear"
+                    style={{
+                      width: `${timerPct}%`,
+                      background: timerUrgent
+                        ? 'linear-gradient(to right, #ef4444, #ff6b6b)'
+                        : 'linear-gradient(to right, #3b82f6, #60a5fa)',
+                    }}
+                  />
+                </div>
+                <div className={`text-right text-xs font-mono font-bold mt-1 ${timerUrgent ? 'text-red-400 animate-urgency' : 'text-gray-500'}`}>
+                  {timeLeft}s remaining
+                </div>
+              </div>
 
-              <form onSubmit={handleAnswer} className="mt-5 flex gap-2">
+              {/* Answer form */}
+              <form onSubmit={handleAnswer} className="flex gap-2">
                 <input
-                  className="flex-1 px-4 py-2.5 rounded-lg bg-gray-700 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 text-lg font-mono"
-                  placeholder="Your answer…"
+                  className="flex-1 px-4 py-3 rounded-xl input-race text-white text-xl font-black font-mono placeholder-gray-700"
+                  placeholder="?"
                   value={answer}
                   onChange={(e) => setAnswer(e.target.value)}
                   autoComplete="off"
@@ -368,59 +455,118 @@ export default function RaceTrack() {
                 />
                 <button
                   type="submit"
-                  className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold transition-colors"
+                  className="px-6 py-3 btn-primary rounded-xl font-black text-white text-sm"
                 >
                   Submit
                 </button>
               </form>
 
               {feedback && (
-                <p className={`mt-3 text-sm font-semibold ${feedback.correct ? 'text-green-400' : 'text-red-400'}`}>
-                  {feedback.correct ? '✓' : '✗'} {feedback.text}
-                </p>
+                <div className={`mt-3 px-4 py-2.5 rounded-xl text-sm font-black text-center ${
+                  feedback.correct
+                    ? 'animate-answer-pop bg-green-500/15 border border-green-500/35 text-green-400'
+                    : 'animate-shake bg-red-500/15 border border-red-500/35 text-red-400'
+                }`}>
+                  {feedback.correct ? '✓ ' : '✗ '}{feedback.text}
+                </div>
               )}
-            </>
+            </div>
           ) : !isStalled && !decisionPending ? (
-            <p className="text-gray-500 flex-1 flex items-center justify-center">
-              Waiting for the race to start…
-            </p>
+            <div className="flex-1 flex flex-col card-glass rounded-2xl p-6">
+              <div className="flex items-center gap-4 mb-6">
+                <span className="text-4xl animate-float shrink-0">⏳</span>
+                <div>
+                  <p className="text-lg font-black text-white">Waiting for race to start…</p>
+                  <p className="text-gray-500 text-sm">Your teacher will kick things off shortly.</p>
+                </div>
+              </div>
+              {sorted.length > 0 && (
+                <div>
+                  <p className="text-xs font-bold text-gray-600 uppercase tracking-wider mb-3">
+                    In the lobby · {sorted.length} racer{sorted.length !== 1 ? 's' : ''}
+                  </p>
+                  <div className="space-y-2">
+                    {sorted.map((p) => {
+                      const isMe = p.username === username;
+                      return (
+                        <div
+                          key={p.userId}
+                          className={`flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all ${isMe ? 'border border-yellow-500/25' : ''}`}
+                          style={{ background: isMe ? 'rgba(255,215,0,0.07)' : 'rgba(255,255,255,0.03)' }}
+                        >
+                          <span className="text-base">{isMe ? '🏎️' : '🚗'}</span>
+                          <span className={`text-sm font-bold flex-1 truncate ${isMe ? 'text-yellow-400' : 'text-gray-300'}`}>
+                            {p.username}
+                          </span>
+                          {isMe && <span className="text-xs text-gray-600">You</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
           ) : null}
         </section>
 
-        {/* Leaderboard */}
-        <section className="w-52 bg-gray-800 rounded-xl p-4 flex flex-col">
-          <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">
-            Leaderboard
+        {/* Leaderboard sidebar */}
+        <aside className="w-48 p-4 flex flex-col border-l border-white/5"
+          style={{ background: 'rgba(13,17,23,0.5)' }}>
+          <h2 className="text-xs font-bold text-gray-600 uppercase tracking-wider mb-4">
+            Standings
           </h2>
-          <ol className="space-y-2 flex-1">
+          <ol className="space-y-2.5 flex-1">
             {sorted.map((p, i) => (
-              <li
-                key={p.userId}
-                className={`flex items-center gap-2 text-sm ${p.username === username ? 'text-yellow-400 font-bold' : ''}`}
-              >
-                <span className="text-gray-500 w-5 shrink-0 text-right">{i + 1}.</span>
+              <li key={p.userId} className={`flex items-center gap-2 text-xs ${p.username === username ? 'text-yellow-400 font-black' : 'text-gray-400'}`}>
+                <span className="w-5 text-center shrink-0">
+                  {i < 3 ? MEDALS[i] : <span className="text-gray-600">{i+1}</span>}
+                </span>
                 <span className="flex-1 truncate">{p.username}</span>
-                <span className="font-mono text-xs">{p.currentPosition}</span>
+                <span className="font-mono text-gray-600 shrink-0">{p.currentPosition}</span>
               </li>
             ))}
             {sorted.length === 0 && (
-              <li className="text-gray-600 text-sm">No participants yet</li>
+              <li className="text-gray-700 text-xs">Waiting…</li>
             )}
           </ol>
-        </section>
+        </aside>
       </div>
     </div>
   );
 }
 
-function TimerBadge({ timeLeft }: { timeLeft: number }) {
-  const urgent = timeLeft <= 10;
+function TimerRing({
+  timeLeft,
+  pct,
+  urgent,
+}: {
+  timeLeft: number;
+  pct: number;
+  urgent: boolean;
+}) {
+  const r = 18;
+  const circ = 2 * Math.PI * r;
+  const dash = (pct / 100) * circ;
+
   return (
-    <div className={`flex items-center gap-1.5 text-sm font-mono font-bold px-3 py-1 rounded-full ${
-      urgent ? 'bg-red-900/60 text-red-400 animate-pulse' : 'bg-gray-700 text-gray-300'
-    }`}>
-      <span>⏱</span>
-      <span>{timeLeft}s</span>
+    <div className={`relative w-14 h-14 shrink-0 ${urgent ? 'animate-urgency' : ''}`}>
+      <svg className="w-full h-full -rotate-90" viewBox="0 0 44 44">
+        <circle cx="22" cy="22" r={r} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="3.5" />
+        <circle
+          cx="22" cy="22" r={r}
+          fill="none"
+          stroke={urgent ? '#ef4444' : '#3b82f6'}
+          strokeWidth="3.5"
+          strokeLinecap="round"
+          strokeDasharray={`${dash} ${circ}`}
+          style={{ transition: 'stroke-dasharray 1s linear, stroke 0.5s ease' }}
+        />
+      </svg>
+      <div className="absolute inset-0 flex items-center justify-center">
+        <span className={`text-sm font-black font-mono ${urgent ? 'text-red-400' : 'text-white'}`}>
+          {timeLeft}
+        </span>
+      </div>
     </div>
   );
 }

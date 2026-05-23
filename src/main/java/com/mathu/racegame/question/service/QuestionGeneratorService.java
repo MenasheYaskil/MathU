@@ -55,10 +55,41 @@ public class QuestionGeneratorService {
     }
 
     private GeneratedQuestion resolveTemplate(QuestionTemplate template) {
-        String resolved = replacePlaceholders(template.getTemplateText());
+        String text = template.getTemplateText();
+        String raw  = replacePlaceholders(text);
+
+        // Assign once so `resolved` is effectively final for the lambda closures below.
+        // Division post-processing: round dividend up to nearest multiple of divisor.
+        final String resolved = (text.contains("÷") || text.contains("/"))
+                ? ensureIntegerDivision(raw)
+                : raw;
+
         return tryComputeArithmeticAnswer(resolved)
                 .map(answer -> GeneratedQuestion.of(resolved, answer))
                 .orElseGet(() -> GeneratedQuestion.of(resolved));
+    }
+
+    /**
+     * For expressions like "13 ÷ 4 = ?", rounds the dividend UP to the nearest
+     * multiple of the divisor so the answer is always a whole number.
+     * E.g.: "13 ÷ 4" → "16 ÷ 4" (answer = 4).
+     * Ensures quotient ≥ 1 and divisor ≥ 2.
+     */
+    private String ensureIntegerDivision(String questionText) {
+        Matcher m = ARITHMETIC_PATTERN.matcher(questionText);
+        if (!m.find()) return questionText;
+
+        String op = m.group(2);
+        if (!op.equals("÷") && !op.equals("/")) return questionText;
+
+        int divisor  = Math.max(2, Integer.parseInt(m.group(3)));
+        int rawDividend = Integer.parseInt(m.group(1));
+
+        // Round dividend up to the nearest multiple of divisor, quotient ≥ 1
+        int quotient = Math.max(1, (rawDividend + divisor - 1) / divisor);
+        int dividend = divisor * quotient;
+
+        return dividend + " ÷ " + divisor + " = ?";
     }
 
     /**

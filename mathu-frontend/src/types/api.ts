@@ -28,6 +28,15 @@ export interface Race {
   entryCode: string;
   status: RaceStatus;
   baseDifficulty: number;
+  participantCount?: number;
+  winnerUsername?: string;
+  finishedAt?: string;
+}
+
+export interface RaceLeaderboardEntry {
+  userId: number;
+  username: string;
+  position: number;
 }
 
 export interface CreateRaceRequest {
@@ -42,6 +51,10 @@ export interface CreateRaceResponse {
 
 export interface JoinRaceResponse {
   raceId: number;
+  participantId: number;
+  title: string;
+  entryCode: string;
+  status: RaceStatus;
 }
 
 export interface AnswerRequest {
@@ -73,6 +86,7 @@ export type SseEventType =
   | 'LEADERBOARD_SNAPSHOT'
   | 'POSITION_UPDATE'
   | 'PARTICIPANT_JOINED'
+  | 'PLAYER_KICKED'
   | 'RACE_START'
   | 'RACE_FINISH'
   | 'HEARTBEAT'
@@ -116,6 +130,11 @@ export interface RaceFinishData {
 
 export interface ParticipantJoinedData {
   raceId: number;
+  userId: number;
+  username: string;
+}
+
+export interface PlayerKickedData {
   userId: number;
   username: string;
 }

@@ -1,9 +1,11 @@
 package com.mathu.racegame.security.config;
 
 import com.mathu.racegame.security.filter.JwtAuthenticationFilter;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.MediaType;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
@@ -51,11 +53,29 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/error").permitAll()
-                        // SSE endpoint: authenticated() is safe here because JwtAuthenticationFilter
-                        // already extracts the token from the ?token= query parameter and populates
-                        // the SecurityContext before Spring Security checks this rule.
                         .requestMatchers("/api/races/*/events").authenticated()
+                        .requestMatchers("/api/races/*/my-events").authenticated()
                         .anyRequest().authenticated()
+                )
+                .exceptionHandling(ex -> ex
+                        // Replaces Spring's default LoginUrlAuthenticationEntryPoint, which calls
+                        // sendRedirect("/login"). A redirect on a committed SSE stream (where
+                        // text/event-stream headers are already written) throws IllegalStateException
+                        // — the "Unable to handle the Spring Security Exception because the response
+                        // is already committed" crash. This handler writes JSON and, critically,
+                        // checks isCommitted() so it never tries to write to a closed stream.
+                        .authenticationEntryPoint((request, response, ex2) -> {
+                            if (response.isCommitted()) return;
+                            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+                            response.getWriter().write("{\"error\":\"Unauthorized\"}");
+                        })
+                        .accessDeniedHandler((request, response, ex2) -> {
+                            if (response.isCommitted()) return;
+                            response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+                            response.getWriter().write("{\"error\":\"Forbidden\"}");
+                        })
                 )
                 .authenticationProvider(authenticationProvider())
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)

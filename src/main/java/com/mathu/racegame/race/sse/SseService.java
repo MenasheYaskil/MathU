@@ -186,6 +186,17 @@ public class SseService {
         }
     }
 
+    /**
+     * Closes and removes a participant's personal SSE channel.
+     * Called after a teacher kicks a student so their /my-events stream is terminated.
+     */
+    public void completeParticipantChannel(Long participantId) {
+        SseEmitter emitter = participantEmitters.remove(participantId);
+        if (emitter != null) {
+            try { emitter.complete(); } catch (Exception ignored) {}
+        }
+    }
+
     public int activeConnectionCount(Long raceId) {
         CopyOnWriteArrayList<SseEmitter> list = raceEmitters.get(raceId);
         return list == null ? 0 : list.size();

@@ -36,6 +36,19 @@ public class RaceController {
         this.participantRepository = participantRepository;
     }
 
+    /**
+     * Teacher permanently deletes a LOBBY or FINISHED race.
+     * Active races are rejected — they must finish before deletion.
+     */
+    @DeleteMapping("/{raceId}")
+    public ResponseEntity<Void> deleteRace(
+            @PathVariable Long raceId,
+            @AuthenticationPrincipal User currentUser) {
+
+        raceService.deleteRace(raceId, currentUser);
+        return ResponseEntity.noContent().build();
+    }
+
     /** Teacher creates a new race. Returns the race ID and auto-generated 6-char entry code. */
     @PostMapping
     public ResponseEntity<Map<String, Object>> createRace(
@@ -96,15 +109,16 @@ public class RaceController {
     }
 
     /**
-     * Returns race details. Accessible to the creator and all enrolled participants.
-     * Intended for lobby polling before SSE is connected.
+     * Returns race details including winner and finishedAt for FINISHED races.
+     * Accessible to the creator and all enrolled participants.
      */
     @GetMapping("/{raceId}")
     public ResponseEntity<Map<String, Object>> getRace(
             @PathVariable Long raceId,
             @AuthenticationPrincipal User currentUser) {
 
-        Race race = raceRepository.findByIdWithCreator(raceId)
+        // JOIN FETCH both createdBy and winner to avoid LazyInitializationException
+        Race race = raceRepository.findByIdWithCreatorAndWinner(raceId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Race not found"));
 
         boolean isCreator = race.getCreatedBy().getId().equals(currentUser.getId());
@@ -112,14 +126,17 @@ public class RaceController {
             throw new AccessDeniedException("You are not a member of this race");
         }
 
-        return ResponseEntity.ok(Map.of(
-                "raceId",           race.getId(),
-                "title",            race.getTitle(),
-                "status",           race.getStatus().name(),
-                "entryCode",        race.getEntryCode(),
-                "baseDifficulty",   race.getBaseDifficulty(),
-                "participantCount", participantRepository.countByRaceId(raceId)
-        ));
+        // LinkedHashMap to support null values (Map.of() rejects null)
+        var details = new java.util.LinkedHashMap<String, Object>();
+        details.put("raceId",           race.getId());
+        details.put("title",            race.getTitle());
+        details.put("status",           race.getStatus().name());
+        details.put("entryCode",        race.getEntryCode());
+        details.put("baseDifficulty",   race.getBaseDifficulty());
+        details.put("participantCount", participantRepository.countByRaceId(raceId));
+        if (race.getWinner()     != null) details.put("winnerUsername", race.getWinner().getUsername());
+        if (race.getFinishedAt() != null) details.put("finishedAt",     race.getFinishedAt().toString());
+        return ResponseEntity.ok(details);
     }
 
     /** Returns all races created by the authenticated teacher. TEACHER only. */
@@ -131,17 +148,36 @@ public class RaceController {
             throw new AccessDeniedException("Only teachers can list races");
         }
 
+        // finishedAt is a plain column — safe to access without a transaction.
+        // winner is LAZY so we skip it here; the modal fetches /races/{id} for full details.
         List<Map<String, Object>> result = raceRepository.findByCreatedBy(currentUser).stream()
-                .map(r -> Map.<String, Object>of(
-                        "raceId",         r.getId(),
-                        "title",          r.getTitle(),
-                        "status",         r.getStatus().name(),
-                        "entryCode",      r.getEntryCode(),
-                        "baseDifficulty", r.getBaseDifficulty()
-                ))
+                .map(r -> {
+                    var m = new java.util.LinkedHashMap<String, Object>();
+                    m.put("raceId",         r.getId());
+                    m.put("title",          r.getTitle());
+                    m.put("status",         r.getStatus().name());
+                    m.put("entryCode",      r.getEntryCode());
+                    m.put("baseDifficulty", r.getBaseDifficulty());
+                    if (r.getFinishedAt() != null) m.put("finishedAt", r.getFinishedAt().toString());
+                    return (Map<String, Object>) m;
+                })
                 .toList();
 
         return ResponseEntity.ok(result);
+    }
+
+    /**
+     * Teacher removes a student from an active or lobby race.
+     * Broadcasts PLAYER_KICKED to all SSE clients and closes the student's personal channel.
+     */
+    @DeleteMapping("/{raceId}/participants/{userId}")
+    public ResponseEntity<Void> kickPlayer(
+            @PathVariable Long raceId,
+            @PathVariable Long userId,
+            @AuthenticationPrincipal User currentUser) {
+
+        raceService.kickPlayer(raceId, userId, currentUser);
+        return ResponseEntity.noContent().build();
     }
 
     /**

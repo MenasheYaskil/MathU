@@ -8,6 +8,8 @@ interface RaceState {
   currentQuestion: QuestionDispatchedData | null;
   setLeaderboard: (raceId: number, status: RaceStatus, participants: ParticipantSnapshot[]) => void;
   updatePosition: (userId: number, position: number) => void;
+  addParticipant: (participant: ParticipantSnapshot) => void;
+  removeParticipant: (userId: number) => void;
   setQuestion: (q: QuestionDispatchedData) => void;
   reset: () => void;
 }
@@ -30,6 +32,16 @@ export const useRaceStore = create<RaceState>((set) => ({
         .map((p) => (p.userId === userId ? { ...p, currentPosition: position } : p))
         .sort(byPositionDesc),
     })),
+
+  addParticipant: (participant) =>
+    set((s) => ({
+      leaderboard: s.leaderboard.some((p) => p.userId === participant.userId)
+        ? s.leaderboard
+        : [...s.leaderboard, participant].sort(byPositionDesc),
+    })),
+
+  removeParticipant: (userId) =>
+    set((s) => ({ leaderboard: s.leaderboard.filter((p) => p.userId !== userId) })),
 
   setQuestion: (currentQuestion) => set({ currentQuestion }),
 
