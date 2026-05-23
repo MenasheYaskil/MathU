@@ -2,14 +2,8 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../../stores/authStore';
 import { useRaceStore } from '../../../stores/raceStore';
-import { subscribeToRace, subscribeToMyEvents } from '../../../services/sseService';
+import { useGameSSE } from '../../../hooks/useGameSSE';
 import { races as racesApi } from '../../../services/apiService';
-import type {
-  LeaderboardSnapshotData,
-  PositionUpdateData,
-  QuestionDispatchedData,
-  RaceFinishData,
-} from '../../../types/api';
 
 const TRACK_LENGTH = 1000;
 const QUESTION_TIME_SEC = 30;
@@ -29,7 +23,6 @@ export default function RaceTrack() {
     useRaceStore();
 
   const [answer, setAnswer] = useState('');
-  const [sseError, setSseError] = useState(false);
   const [decisionPending, setDecisionPending] = useState(false);
   const [isDecisionLoading, setIsDecisionLoading] = useState(false);
   const [timeLeft, setTimeLeft] = useState(QUESTION_TIME_SEC);
@@ -72,28 +65,30 @@ export default function RaceTrack() {
     return () => clearInterval(tick);
   }, [stallUntil]);
 
-  // SSE subscriptions
+  // Redirect if token is gone (logout, session expiry)
   useEffect(() => {
-    if (!token) { navigate('/'); return; }
-    let myEventsUnsub: (() => void) | null = null;
+    if (!token) navigate('/');
+  }, [token, navigate]);
 
-    const connectMyEvents = () => {
-      if (myEventsUnsub) return;
-      myEventsUnsub = subscribeToMyEvents(
-        id, token,
-        (q: QuestionDispatchedData) => { setQuestion(q); setFeedback(null); setDecisionPending(false); },
-        () => setSseError(true),
-      );
-    };
+  // Clean up race store state on unmount
+  useEffect(() => () => { reset(); }, [reset]);
 
-    const unsubRace = subscribeToRace(id, token, {
-      onLeaderboardSnapshot: (d: LeaderboardSnapshotData) => {
+  // Break the circular dependency: handlers reference openPersonalChannel, which is
+  // returned by useGameSSE, which receives the handlers. The ref is assigned
+  // synchronously below the hook call, so it holds the real function before any
+  // async SSE event can fire.
+  const openPersonalChannelRef = useRef<() => void>(() => undefined);
+
+  const { sseError, openPersonalChannel } = useGameSSE(
+    id,
+    {
+      onLeaderboardSnapshot: (d) => {
         setLeaderboard(d.raceId, d.status, d.participants);
-        if (d.status === 'ACTIVE') connectMyEvents();
+        if (d.status === 'ACTIVE') openPersonalChannelRef.current();
       },
-      onPositionUpdate: (d: PositionUpdateData) => updatePosition(d.userId, d.position),
-      onRaceStart: () => connectMyEvents(),
-      onRaceFinish: (d: RaceFinishData) => setWinner(d.winnerUsername),
+      onPositionUpdate: (d) => updatePosition(d.userId, d.position),
+      onRaceStart: () => openPersonalChannelRef.current(),
+      onRaceFinish: (d) => setWinner(d.winnerUsername),
       onPowerUp: (data) => {
         if (data.type === 'TURBO') {
           setPowerUpMsg({ text: '⚡ TURBO! Speed boost activated!', type: 'good' });
@@ -102,11 +97,11 @@ export default function RaceTrack() {
         }
         setTimeout(() => setPowerUpMsg(null), 3500);
       },
-      onError: () => setSseError(true),
-    });
+    },
+    (q) => { setQuestion(q); setFeedback(null); setDecisionPending(false); },
+  );
 
-    return () => { unsubRace(); myEventsUnsub?.(); reset(); };
-  }, [id, token, navigate, setLeaderboard, updatePosition, setQuestion, reset]);
+  openPersonalChannelRef.current = openPersonalChannel;
 
   const processAnswerResult = useCallback(async (result: Awaited<ReturnType<typeof racesApi.submitAnswer>>) => {
     if (result.stalledNow) {
